@@ -4,6 +4,12 @@ import dotenv from 'dotenv';
 // Ensure environment variables are loaded
 dotenv.config();
 
+console.log('Email configuration:', {
+  user: process.env.EMAIL_USER,
+  adminEmail: process.env.ADMIN_EMAIL || 'admin@beautiq.com',
+  frontendUrl: process.env.FRONTEND_URL || 'http://localhost:3000'
+});
+
 // Export the transporter
 export const transporter = nodemailer.createTransport({
   service: 'gmail',
@@ -104,44 +110,65 @@ export const sendApprovalEmail = async (email, businessName, fullName) => {
 
 export const sendRegistrationNotificationToAdmin = async (serviceProvider) => {
   try {
-    // First, find admin email
-    // This is just a placeholder - in a real app, you'd query for the admin
+    console.log('Preparing admin notification email for:', serviceProvider.businessName);
+    
+    // First, find admin email - you should set this in your environment variables
     const adminEmail = process.env.ADMIN_EMAIL || 'admin@beautiq.com';
+    console.log('Sending notification to admin email:', adminEmail);
     
     const adminUrl = `${process.env.FRONTEND_URL}/admin-dashboard`;
     
     const mailOptions = {
-      from: process.env.EMAIL_USER,
+      from: {
+        name: 'BeautiQ System',
+        address: process.env.EMAIL_USER
+      },
       to: adminEmail,
-      subject: 'New Service Provider Registration',
+      subject: 'New Service Provider Registration - Action Required',
       html: `
-        <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
+        <div style="max-width: 600px; margin: 0 auto; padding: 20px; font-family: Arial, sans-serif;">
           <h1 style="color: #1976d2; text-align: center;">New Service Provider Registration</h1>
-          <p>A new service provider has registered and is pending your approval:</p>
-          <ul>
-            <li><strong>Business Name:</strong> ${serviceProvider.businessName}</li>
-            <li><strong>Owner:</strong> ${serviceProvider.fullName}</li>
-            <li><strong>Email:</strong> ${serviceProvider.emailAddress}</li>
-            <li><strong>Phone:</strong> ${serviceProvider.mobileNumber}</li>
-          </ul>
+          <div style="background-color: #f5f5f5; padding: 20px; border-radius: 8px; margin: 20px 0;">
+            <p><strong>A new service provider has registered and is awaiting your approval:</strong></p>
+            <ul style="line-height: 1.6;">
+              <li><strong>Business Name:</strong> ${serviceProvider.businessName}</li>
+              <li><strong>Owner:</strong> ${serviceProvider.fullName}</li>
+              <li><strong>Email:</strong> ${serviceProvider.emailAddress}</li>
+              <li><strong>Phone:</strong> ${serviceProvider.mobileNumber}</li>
+              <li><strong>Business Type:</strong> ${serviceProvider.businessType}</li>
+              <li><strong>Registration Date:</strong> ${new Date().toLocaleDateString()}</li>
+            </ul>
+          </div>
           <div style="text-align: center; margin: 30px 0;">
             <a href="${adminUrl}" 
                style="background-color: #1976d2; 
                       color: white; 
-                      padding: 12px 24px; 
+                      padding: 15px 30px; 
                       text-decoration: none; 
-                      border-radius: 4px;">
-              Go to Admin Dashboard
+                      border-radius: 8px;
+                      font-size: 16px;
+                      display: inline-block;">
+              Review in Admin Dashboard
             </a>
           </div>
+          <p style="color: #666; font-size: 14px; text-align: center;">
+            Please review and approve/reject this registration in your admin dashboard.
+          </p>
         </div>
       `
     };
 
-    await transporter.sendMail(mailOptions);
+    console.log('Sending email with options:', {
+      to: mailOptions.to,
+      subject: mailOptions.subject,
+      from: mailOptions.from
+    });
+
+    const result = await transporter.sendMail(mailOptions);
+    console.log('Admin notification email sent successfully:', result.messageId);
     return true;
   } catch (error) {
-    console.error('Email sending error:', error);
+    console.error('Detailed email sending error:', error);
     throw new Error(`Failed to send admin notification email: ${error.message}`);
   }
 };

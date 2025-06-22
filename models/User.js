@@ -1,91 +1,19 @@
-// import mongoose from 'mongoose';
-
-// const userSchema = new mongoose.Schema({
-//   fullName: {
-//     type: String,
-//     required: true
-//   },
-//   currentAddress: {
-//     type: String,
-//     required: true
-//   },
-//   emailAddress: {
-//     type: String,
-//     required: true,
-//     unique: true,
-//     lowercase: true
-//   },
-//   mobileNumber: {
-//     type: String,
-//     required: true
-//   },
-//   password: {
-//     type: String,
-//     required: true
-//   },
-//   role: {
-//     type: String,
-//     required: true,
-//     enum: ['customer', 'serviceProvider', 'admin'],
-//     default: 'customer'
-//   },
-//   // Additional fields for service providers
-//   businessName: {
-//     type: String,
-//     required: function() {
-//       return this.role === 'serviceProvider';
-//     }
-//   },
-//   services: [{
-//     name: String,
-//     description: String,
-//     price: Number
-//   }],
-//   location: {
-//     address: String,
-//     city: String,
-//     state: String,
-//     zipCode: String
-//   },
-//   businessHours: {
-//     type: Map,
-//     of: {
-//       open: String,
-//       close: String
-//     }
-//   },
-//   createdAt: {
-//     type: Date,
-//     default: Date.now
-//   },
-//   resetToken: String,
-//   resetTokenExpiry: Date
-// });
-
-// export default mongoose.model('User', userSchema);
-
-
 import mongoose from 'mongoose';
 import bcrypt from 'bcryptjs';
 
 const userSchema = new mongoose.Schema({
+  // Common fields for all users
   fullName: {
     type: String,
-    required: true
-  },
-  currentAddress: {
-    type: String,
-    required: true
+    required: true,
+    trim: true
   },
   emailAddress: {
     type: String,
     required: true,
     unique: true,
-    lowercase: true
-  },
-  mobileNumber: {
-    type: String,
-    required: true
+    lowercase: true,
+    trim: true
   },
   password: {
     type: String,
@@ -93,49 +21,106 @@ const userSchema = new mongoose.Schema({
   },
   role: {
     type: String,
-    required: true,
     enum: ['customer', 'serviceProvider', 'admin'],
     default: 'customer'
-  },
-  // Additional fields for service providers
-  businessName: {
-    type: String,
-    required: function() {
-      // Make it not required during creation but validate later
-      return false;
-    }
   },
   approved: {
     type: Boolean,
     default: function() {
-      return this.role !== 'serviceProvider'; // Only service providers need approval
+      return this.role === 'customer' ? true : false;
     }
   },
+  
+  // Service Provider specific fields
+  businessName: {
+    type: String,
+    required: function() { return this.role === 'serviceProvider'; }
+  },
+  businessDescription: {
+    type: String
+  },
+  businessType: {
+    type: String,
+    enum: ['individual', 'salon', 'spa', 'mobile_service', 'studio'],
+    required: function() { return this.role === 'serviceProvider'; }
+  },
+  city: {
+    type: String,
+    required: function() { return this.role === 'serviceProvider'; }
+  },
+  currentAddress: {
+    type: String,
+    required: function() { return this.role === 'serviceProvider'; }
+  },
+  homeAddress: {
+    type: String,
+    required: function() { return this.role === 'serviceProvider'; }
+  },
+  mobileNumber: {
+    type: String,
+    required: function() { return this.role === 'serviceProvider'; }
+  },
+  nicNumber: {
+    type: String,
+    required: function() { return this.role === 'serviceProvider'; }
+  },
+  
+  // Service Provider services and policies
   services: [{
     name: String,
+    type: String,
+    category: String,
     description: String,
-    price: Number
+    price: Number,
+    duration: Number,
+    location: String
   }],
   location: {
-    address: String,
     city: String,
-    state: String,
-    zipCode: String
+    serviceArea: String
   },
-  businessHours: {
-    type: Map,
-    of: {
-      open: String,
-      close: String
-    }
+  experience: {
+    years: Number,
+    description: String
   },
+  specialties: [String],
+  languages: [String],
+  policies: {
+    cancellation: String,
+    paymentMethods: [String],
+    advanceBooking: Number
+  },
+  
+  // File uploads
+  profilePhoto: String,
+  nicFrontPhoto: String,
+  nicBackPhoto: String,
+  certificatesPhotos: [String],
+  
+  // Password reset fields
+  resetToken: String,
+  resetTokenExpiry: Date,
+  
+  // Timestamps
   createdAt: {
     type: Date,
     default: Date.now
   },
-  resetToken: String,
-  resetTokenExpiry: Date
+  updatedAt: {
+    type: Date,
+    default: Date.now
+  }
 });
+
+// Update the updatedAt field before saving
+userSchema.pre('save', function(next) {
+  this.updatedAt = Date.now();
+  next();
+});
+
+// Index for faster queries
+userSchema.index({ emailAddress: 1, role: 1 });
+userSchema.index({ role: 1, approved: 1 });
 
 // Method to compare password
 userSchema.methods.comparePassword = async function(candidatePassword) {

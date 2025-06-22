@@ -3,26 +3,39 @@ import cors from 'cors';
 import mongoose from 'mongoose';
 import dotenv from 'dotenv';
 import authRoutes from './routes/auth.js';
+import serviceRoutes from './routes/services.js';
+import packageRoutes from './routes/packages.js';
+import bookingRoutes from './routes/bookings.js';
 import { transporter } from './config/mailer.js';
 
 dotenv.config();
 
 const app = express();
 
-// Middleware
-app.use(cors());
-app.use(express.json());
-
-// Database connection with better error handling
+// Database connection
 mongoose.connect(process.env.MONGODB_URI)
   .then(() => console.log('✓ Connected to MongoDB'))
   .catch(err => {
     console.error('MongoDB connection error:', err);
-    process.exit(1); // Exit if DB connection fails
+    process.exit(1);
   });
+
+// Middleware
+app.use(cors({
+  origin: ['http://localhost:3000', 'http://127.0.0.1:3000'],
+  credentials: true
+}));
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+// Serve static files for uploads
+app.use('/uploads', express.static('uploads'));
 
 // Routes
 app.use('/api/auth', authRoutes);
+app.use('/api/services', serviceRoutes);
+app.use('/api/packages', packageRoutes);
+app.use('/api/bookings', bookingRoutes);
 
 // Health check endpoint
 app.get('/health', (req, res) => {
@@ -56,11 +69,81 @@ if (process.env.NODE_ENV === 'development') {
 }
 
 // Error handling middleware
-app.use((err, req, res, next) => {
-  console.error('Server error:', err);
-  res.status(500).json({ 
+app.use((error, req, res, next) => {
+  console.error('Server error:', error);
+  
+  // Mongoose validation error
+  if (error.name === 'ValidationError') {
+    const validationErrors = Object.values(error.errors).map(e => e.message);
+    return res.status(400).json({
+      message: 'Validation failed',
+      error: 'VALIDATION_ERROR',
+      details: validationErrors
+    });
+  }
+
+  // Mongoose cast error (invalid ObjectId)
+  if (error.name === 'CastError') {
+    return res.status(400).json({
+      message: 'Invalid ID format',
+      error: 'INVALID_ID_FORMAT'
+    });
+  }
+
+  // MongoDB duplicate key error
+  if (error.code === 11000) {
+    const field = Object.keys(error.keyValue)[0];
+    return res.status(409).json({
+      message: `Duplicate ${field} value`,
+      error: 'DUPLICATE_KEY_ERROR',
+      field: field
+    });
+  }
+
+  // JWT errors
+  if (error.name === 'JsonWebTokenError') {
+    return res.status(401).json({
+      message: 'Invalid token',
+      error: 'INVALID_TOKEN'
+    });
+  }
+
+  if (error.name === 'TokenExpiredError') {
+    return res.status(401).json({
+      message: 'Token expired',
+      error: 'TOKEN_EXPIRED'
+    });
+  }
+
+  // File upload errors
+  if (error.code === 'LIMIT_FILE_SIZE') {
+    return res.status(400).json({
+      message: 'File too large',
+      error: 'FILE_TOO_LARGE'
+    });
+  }
+
+  // Database connection errors
+  if (error.name === 'MongoNetworkError' || error.name === 'MongoTimeoutError') {
+    return res.status(503).json({
+      message: 'Database connection error',
+      error: 'DATABASE_CONNECTION_ERROR'
+    });
+  }
+
+  // Default error response
+  res.status(error.status || 500).json({
     message: 'Internal server error',
-    error: process.env.NODE_ENV === 'development' ? err.message : undefined
+    error: 'INTERNAL_SERVER_ERROR',
+    details: process.env.NODE_ENV === 'development' ? error.message : 'An unexpected error occurred'
+  });
+});
+
+// Handle 404 errors
+app.use('*', (req, res) => {
+  res.status(404).json({
+    message: `Route ${req.originalUrl} not found`,
+    error: 'ROUTE_NOT_FOUND'
   });
 });
 

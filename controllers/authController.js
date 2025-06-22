@@ -1,193 +1,255 @@
-import User from '../models/User.js';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
-import { 
-  sendResetEmail, 
-  sendApprovalEmail,
-  sendRegistrationNotificationToAdmin 
-} from '../config/mailer.js';
+import User from '../models/User.js';
 
-// Generate JWT token
-const generateToken = (user) => {
-  return jwt.sign(
-    { userId: user._id, role: user.role },
-    process.env.JWT_SECRET,
-    { expiresIn: '24h' }
-  );
+// Enhanced validation helper
+const validateRegistrationData = (data, role) => {
+  const errors = [];
+  
+  // Common validations
+  if (!data.fullName || data.fullName.length < 2) {
+    errors.push('Full name must be at least 2 characters');
+  }
+  
+  if (!data.emailAddress || !/\S+@\S+\.\S+/.test(data.emailAddress)) {
+    errors.push('Valid email address is required');
+  }
+  
+  if (!data.password || data.password.length < 8) {
+    errors.push('Password must be at least 8 characters');
+  }
+  
+  // Role-specific validations
+  if (role === 'serviceProvider') {
+    if (!data.businessName) errors.push('Business name is required');
+    if (!data.city) errors.push('City is required');
+    if (!data.nicNumber) errors.push('NIC number is required');
+    if (!data.mobileNumber) errors.push('Mobile number is required');
+  }
+  
+  return errors;
 };
 
-// Register user
 export const register = async (req, res) => {
   try {
-    const { 
-      fullName, 
-      currentAddress, 
-      emailAddress, 
-      mobileNumber, 
-      password, 
-      role,
+    console.log('Registration request received');
+    console.log('Request body keys:', Object.keys(req.body));
+    console.log('Files:', req.files ? Object.keys(req.files) : 'No files');
+    
+    const {
+      fullName,
+      emailAddress,
+      password,
+      role = 'customer',
+      // Service provider specific fields
       businessName,
+      businessDescription,
+      businessType,
+      city,
+      currentAddress,
+      homeAddress,
+      mobileNumber,
+      nicNumber,
       services,
-      location
+      location,
+      experience,
+      specialties,
+      languages,
+      policies
     } = req.body;
+
+    console.log('Role:', role);
+    console.log('Email:', emailAddress);
+
+    // Validate required fields
+    const validationErrors = validateRegistrationData(req.body, role);
+    if (validationErrors.length > 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Validation failed',
+        errors: validationErrors
+      });
+    }
 
     // Check if user already exists
     const existingUser = await User.findOne({ emailAddress });
     if (existingUser) {
-      return res.status(400).json({ message: 'User already exists' });
-    }
-
-    // For admin role - check if an admin already exists
-    if (role === 'admin') {
-      const adminExists = await User.findOne({ role: 'admin' });
-      if (adminExists) {
-        return res.status(403).json({ 
-          message: 'Only one admin account is allowed in the system',
-          adminExists: true
-        });
-      }
-    }
-
-    // Hash password
-    const salt = await bcrypt.genSalt(10);
-    const hashedPassword = await bcrypt.hash(password, salt);
-
-    // Create new user
-    const userData = {
-      fullName,
-      currentAddress,
-      emailAddress,
-      mobileNumber,
-      password: hashedPassword,
-      role: role || 'customer'
-    };
-
-    // Add service provider specific fields if applicable
-    if (role === 'serviceProvider') {
-      userData.businessName = businessName;
-      userData.services = services || [];
-      userData.location = location;
-      userData.approved = false; // Service providers need admin approval
-    }
-
-    const user = new User(userData);
-    await user.save();
-
-    // If service provider, don't generate token yet until approved
-    if (role === 'serviceProvider') {
-      // Notify admin about new service provider registration
-      try {
-        await sendRegistrationNotificationToAdmin(user);
-      } catch (emailError) {
-        console.error('Failed to send admin notification:', emailError);
-        // Continue with registration even if email fails
-      }
-      
-      return res.status(201).json({
-        message: 'Registration successful! Your account is pending admin approval.',
-        user: {
-          id: user._id,
-          fullName: user.fullName,
-          emailAddress: user.emailAddress,
-          role: user.role,
-          approved: false
-        }
+      return res.status(400).json({
+        success: false,
+        message: 'Email address is already registered'
       });
     }
 
-    // For customer and admin, generate token and allow immediate login
-    const token = generateToken(user);
+    // Hash password
+    const saltRounds = 10;
+    const hashedPassword = await bcrypt.hash(password, saltRounds);
+
+    // Prepare user data
+    const userData = {
+      fullName,
+      emailAddress,
+      password: hashedPassword,
+      role,
+      approved: role === 'customer' ? true : false, // Service providers need approval
+      createdAt: new Date()
+    };
+
+    // Add service provider specific fields
+    if (role === 'serviceProvider') {
+      // Parse JSON fields if they're strings
+      let parsedServices = [];
+      let parsedLocation = {};
+      let parsedExperience = {};
+      let parsedSpecialties = [];
+      let parsedLanguages = [];
+      let parsedPolicies = {};
+
+      try {
+        parsedServices = typeof services === 'string' ? JSON.parse(services) : services || [];
+        parsedLocation = typeof location === 'string' ? JSON.parse(location) : location || {};
+        parsedExperience = typeof experience === 'string' ? JSON.parse(experience) : experience || {};
+        parsedSpecialties = typeof specialties === 'string' ? JSON.parse(specialties) : specialties || [];
+        parsedLanguages = typeof languages === 'string' ? JSON.parse(languages) : languages || [];
+        parsedPolicies = typeof policies === 'string' ? JSON.parse(policies) : policies || {};
+      } catch (parseError) {
+        console.error('Error parsing JSON fields:', parseError);
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid JSON data in request'
+        });
+      }
+
+      userData.businessName = businessName;
+      userData.businessDescription = businessDescription;
+      userData.businessType = businessType;
+      userData.city = city;
+      userData.currentAddress = currentAddress;
+      userData.homeAddress = homeAddress;
+      userData.mobileNumber = mobileNumber;
+      userData.nicNumber = nicNumber;
+      userData.services = parsedServices;
+      userData.location = parsedLocation;
+      userData.experience = parsedExperience;
+      userData.specialties = parsedSpecialties;
+      userData.languages = parsedLanguages;
+      userData.policies = parsedPolicies;
+
+      // Handle file uploads
+      if (req.files) {
+        if (req.files.profilePhoto) {
+          userData.profilePhoto = req.files.profilePhoto[0].filename;
+        }
+        if (req.files.nicFrontPhoto) {
+          userData.nicFrontPhoto = req.files.nicFrontPhoto[0].filename;
+        }
+        if (req.files.nicBackPhoto) {
+          userData.nicBackPhoto = req.files.nicBackPhoto[0].filename;
+        }
+        if (req.files.certificatesPhotos) {
+          userData.certificatesPhotos = req.files.certificatesPhotos.map(file => file.filename);
+        }
+      }
+
+      console.log('Service provider data prepared for saving');
+    }
+
+    // Create and save user
+    const newUser = new User(userData);
+    const savedUser = await newUser.save();
+    
+    console.log('User saved successfully:', {
+      id: savedUser._id,
+      role: savedUser.role,
+      approved: savedUser.approved
+    });
+
+    // For service providers, log that they need admin approval
+    if (role === 'serviceProvider') {
+      console.log('Service provider registration saved - pending admin approval');
+    }
 
     res.status(201).json({
-      message: 'User registered successfully',
-      user: {
-        id: user._id,
-        fullName: user.fullName,
-        emailAddress: user.emailAddress,
-        role: user.role
-      },
-      token
+      success: true,
+      message: role === 'serviceProvider' 
+        ? 'Service provider registration submitted successfully. Your application is pending admin approval.'
+        : 'User registered successfully',
+      data: {
+        userId: savedUser._id,
+        fullName: savedUser.fullName,
+        emailAddress: savedUser.emailAddress,
+        role: savedUser.role,
+        approved: savedUser.approved
+      }
     });
+
   } catch (error) {
     console.error('Registration error:', error);
-    res.status(500).json({ message: 'Server error during registration' });
+    res.status(500).json({
+      success: false,
+      message: 'Registration failed',
+      error: error.message
+    });
   }
 };
-
-// controllers/authController.js - Updated login function
 
 export const login = async (req, res) => {
   try {
     const { emailAddress, password, role } = req.body;
-
-    // Find user
-    const user = await User.findOne({ emailAddress });
     
-    if (!user) {
-      return res.status(401).json({ message: 'Invalid credentials' });
+    console.log('Login attempt:', { emailAddress, role });
+
+    if (!emailAddress || !password || !role) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email, password, and role are required'
+      });
     }
 
-    // Verify role matches
-    if (role && user.role !== role) {
-      return res.status(403).json({ 
-        message: 'Invalid account type for this login' 
+    // Find user with the specified role
+    const user = await User.findOne({ emailAddress, role });
+    
+    if (!user) {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid credentials or user role'
       });
     }
 
     // Check password
-    const isValidPassword = await bcrypt.compare(password, user.password);
-    if (!isValidPassword) {
-      return res.status(401).json({ message: 'Invalid credentials' });
+    const isPasswordValid = await bcrypt.compare(password, user.password);
+    if (!isPasswordValid) {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid credentials'
+      });
     }
 
-    // For service providers, check approval status
-    if (user.role === 'serviceProvider') {
-      if (!user.approved) {
-        return res.status(403).json({
-          pendingApproval: true,
-          message: 'Your account is pending admin approval'
-        });
-      }
+    // Check if service provider is approved
+    if (role === 'serviceProvider' && !user.approved) {
+      return res.status(403).json({
+        success: false,
+        message: 'Your service provider account is pending admin approval',
+        pendingApproval: true
+      });
     }
 
-    // Generate token and return user data
-    const token = generateToken(user);
-    
-    res.json({
-      user: {
-        id: user._id,
-        fullName: user.fullName,
-        emailAddress: user.emailAddress,
+    // Generate JWT token
+    const token = jwt.sign(
+      { 
+        userId: user._id,
         role: user.role,
-        approved: user.approved,
-        businessName: user.businessName
+        approved: user.approved
       },
-      token
-    });
-  } catch (error) {
-    console.error('Login error:', error);
-    res.status(500).json({ message: 'Server error during login' });
-  }
-};
+      process.env.JWT_SECRET,
+      { expiresIn: '24h' }
+    );
 
-// Verify token
-export const verifyToken = async (req, res) => {
-  try {
-    const token = req.headers.authorization?.split(' ')[1];
-    
-    if (!token) {
-      return res.status(401).json({ valid: false, message: 'No token provided' });
-    }
+    console.log('Login successful for user:', user._id);
 
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    const user = await User.findById(decoded.userId).select('-password');
-    
-    if (!user) {
-      return res.status(401).json({ valid: false, message: 'User not found' });
-    }
-
-    res.json({ 
-      valid: true, 
+    res.json({
+      success: true,
+      message: 'Login successful',
+      token,
       user: {
         id: user._id,
         fullName: user.fullName,
@@ -196,226 +258,244 @@ export const verifyToken = async (req, res) => {
         approved: user.approved
       }
     });
+
   } catch (error) {
-    console.error('Token verification error:', error);
-    res.status(401).json({ valid: false, message: 'Invalid token' });
-  }
-};
-
-// Reset password
-export const resetPassword = async (req, res) => {
-  try {
-    const { resetToken, newPassword } = req.body;
-
-    if (!resetToken || !newPassword) {
-      return res.status(400).json({ message: 'Reset token and new password are required' });
-    }
-
-    // First verify the token
-    let decoded;
-    try {
-      decoded = jwt.verify(resetToken, process.env.JWT_SECRET);
-    } catch (error) {
-      console.error('Token verification failed:', error);
-      return res.status(400).json({ message: 'Invalid or expired reset token' });
-    }
-
-    // Find user with more detailed logging
-    console.log('Looking for user with ID:', decoded.userId);
-    const user = await User.findOne({
-      _id: decoded.userId,
-      resetToken: resetToken,
-      resetTokenExpiry: { $gt: Date.now() }
-    });
-
-    if (!user) {
-      console.log('User not found or token expired');
-      return res.status(400).json({ message: 'Invalid or expired reset token' });
-    }
-
-    console.log('User found:', {
-      id: user._id,
-      email: user.emailAddress,
-      role: user.role
-    });
-
-    // Hash new password
-    const salt = await bcrypt.genSalt(10);
-    const hashedPassword = await bcrypt.hash(newPassword, salt);
-
-    // Update user password and clear reset token
-    user.password = hashedPassword;
-    user.resetToken = undefined;
-    user.resetTokenExpiry = undefined;
-    
-    // Save the updated user document with proper error handling
-    try {
-      await user.save();
-      console.log('Password updated successfully for user:', user._id);
-    } catch (saveError) {
-      console.error('Error saving user after password reset:', saveError);
-      return res.status(500).json({ 
-        message: 'Error updating password',
-        error: saveError.message 
-      });
-    }
-
-    res.json({ 
-      message: 'Password reset successful',
-      success: true,
-      userRole: user.role // Include the role for debugging
-    });
-  } catch (error) {
-    console.error('Password reset error:', error);
-    res.status(500).json({ 
-      message: 'Error resetting password',
-      error: error.message 
-    });
-  }
-};
-
-// Forgot password
-export const forgotPassword = async (req, res) => {
-  try {
-    const { emailAddress } = req.body;
-    console.log('Received forgot password request for:', emailAddress);
-
-    if (!emailAddress) {
-      return res.status(400).json({ message: 'Email address is required' });
-    }
-
-    // Find user
-    const user = await User.findOne({ emailAddress });
-    console.log('User found:', user ? 'Yes' : 'No');
-
-    if (!user) {
-      // For security reasons, still return success even if user not found
-      return res.status(200).json({
-        success: true,
-        message: 'If an account exists with this email, you will receive a password reset link.'
-      });
-    }
-
-    // Generate reset token
-    const resetToken = jwt.sign(
-      { userId: user._id },
-      process.env.JWT_SECRET,
-      { expiresIn: '1h' }
-    );
-    console.log('Reset token generated');
-
-    // Save reset token to user
-    user.resetToken = resetToken;
-    user.resetTokenExpiry = Date.now() + 3600000; // 1 hour
-    await user.save();
-    console.log('Reset token saved to user');
-
-    try {
-      // Send reset email
-      console.log('Attempting to send reset email...');
-      await sendResetEmail(
-        user.emailAddress,
-        resetToken,
-        user.fullName
-      );
-      console.log('Reset email sent successfully');
-
-      res.status(200).json({
-        success: true,
-        message: 'Password reset link sent successfully'
-      });
-    } catch (emailError) {
-      console.error('Email sending error:', emailError);
-      
-      // Reset the token if email fails
-      user.resetToken = undefined;
-      user.resetTokenExpiry = undefined;
-      await user.save();
-      
-      throw new Error(`Failed to send reset email: ${emailError.message}`);
-    }
-  } catch (error) {
-    console.error('Forgot password error:', error);
+    console.error('Login error:', error);
     res.status(500).json({
       success: false,
-      message: 'An error occurred while processing your request.',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      message: 'Login failed',
+      error: error.message
     });
   }
 };
 
-// Admin route to approve service providers
-export const approveServiceProvider = async (req, res) => {
+export const verifyToken = async (req, res) => {
   try {
-    const { userId } = req.params;
+    const token = req.headers.authorization?.split(' ')[1];
     
-    const serviceProvider = await User.findById(userId);
-    
-    if (!serviceProvider) {
-      return res.status(404).json({ message: 'Service provider not found' });
+    if (!token) {
+      return res.status(401).json({
+        success: false,
+        message: 'No token provided'
+      });
     }
-    
-    if (serviceProvider.role !== 'serviceProvider') {
-      return res.status(400).json({ message: 'User is not a service provider' });
+
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const user = await User.findById(decoded.userId).select('-password');
+
+    if (!user) {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid token'
+      });
     }
-    
-    serviceProvider.approved = true;
-    await serviceProvider.save();
-    
-    // Send notification email to service provider
-    try {
-      await sendApprovalEmail(
-        serviceProvider.emailAddress,
-        serviceProvider.businessName,
-        serviceProvider.fullName
-      );
-    } catch (emailError) {
-      console.error('Failed to send approval email:', emailError);
-      // Continue with approval even if email fails
-    }
-    
-    res.json({ 
-      message: 'Service provider approved successfully',
-      serviceProvider: {
-        id: serviceProvider._id,
-        fullName: serviceProvider.fullName,
-        emailAddress: serviceProvider.emailAddress,
-        approved: serviceProvider.approved
+
+    res.json({
+      success: true,
+      user: {
+        id: user._id,
+        fullName: user.fullName,
+        emailAddress: user.emailAddress,
+        role: user.role,
+        approved: user.approved
       }
     });
+
   } catch (error) {
-    console.error('Approval error:', error);
-    res.status(500).json({ message: 'Server error during approval process' });
+    console.error('Token verification error:', error);
+    res.status(401).json({
+      success: false,
+      message: 'Invalid token'
+    });
   }
 };
 
-// Get pending service providers for admin
-export const getPendingServiceProviders = async (req, res) => {
-  try {
-    const pendingProviders = await User.find({ 
-      role: 'serviceProvider',
-      approved: false
-    }).select('-password');
-    
-    res.json({ pendingProviders });
-  } catch (error) {
-    console.error('Error fetching pending providers:', error);
-    res.status(500).json({ message: 'Server error' });
-  }
-};
-
-// Get user profile
 export const getProfile = async (req, res) => {
   try {
     const user = await User.findById(req.user.userId).select('-password');
     
     if (!user) {
-      return res.status(404).json({ message: 'User not found' });
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
     }
-    
-    res.json({ user });
+
+    res.json({
+      success: true,
+      data: user
+    });
+
   } catch (error) {
-    console.error('Profile fetch error:', error);
-    res.status(500).json({ message: 'Server error fetching profile' });
+    console.error('Get profile error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error retrieving profile',
+      error: error.message
+    });
+  }
+};
+
+export const resetPassword = async (req, res) => {
+  try {
+    const { resetToken, newPassword } = req.body;
+
+    if (!resetToken || !newPassword) {
+      return res.status(400).json({
+        success: false,
+        message: 'Reset token and new password are required'
+      });
+    }
+
+    const decoded = jwt.verify(resetToken, process.env.JWT_SECRET);
+    const user = await User.findById(decoded.userId);
+
+    if (!user || user.resetToken !== resetToken) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid or expired reset token'
+      });
+    }
+
+    if (user.resetTokenExpiry && Date.now() > user.resetTokenExpiry) {
+      return res.status(400).json({
+        success: false,
+        message: 'Reset token has expired'
+      });
+    }
+
+    // Hash new password
+    const saltRounds = 10;
+    const hashedPassword = await bcrypt.hash(newPassword, saltRounds);
+
+    // Update password and clear reset token
+    user.password = hashedPassword;
+    user.resetToken = undefined;
+    user.resetTokenExpiry = undefined;
+    await user.save();
+
+    res.json({
+      success: true,
+      message: 'Password reset successfully'
+    });
+
+  } catch (error) {
+    console.error('Reset password error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error resetting password',
+      error: error.message
+    });
+  }
+};
+
+export const getUserCounts = async (req, res) => {
+  try {
+    const customers = await User.countDocuments({ role: 'customer' });
+    const serviceProviders = await User.countDocuments({ 
+      role: 'service_provider', 
+      approved: true 
+    });
+    const pendingApprovals = await User.countDocuments({ 
+      role: 'service_provider', 
+      approved: false 
+    });
+    const totalUsers = await User.countDocuments();
+
+    res.json({
+      success: true,
+      data: {
+        customers,
+        serviceProviders,
+        pendingApprovals,
+        totalUsers
+      }
+    });
+  } catch (error) {
+    console.error('Get user counts error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to get user counts',
+      error: error.message
+    });
+  }
+};
+
+export const getPendingServiceProviders = async (req, res) => {
+  try {
+    const pendingProviders = await User.find({ 
+      role: 'service_provider', 
+      approved: false 
+    }).select('-password -resetToken -resetTokenExpiry');
+
+    res.json({
+      success: true,
+      data: pendingProviders
+    });
+  } catch (error) {
+    console.error('Get pending service providers error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to get pending service providers',
+      error: error.message
+    });
+  }
+};
+
+export const getApprovedServiceProviders = async (req, res) => {
+  try {
+    const approvedProviders = await User.find({ 
+      role: 'service_provider', 
+      approved: true 
+    }).select('-password -resetToken -resetTokenExpiry');
+
+    res.json({
+      success: true,
+      data: approvedProviders
+    });
+  } catch (error) {
+    console.error('Get approved service providers error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to get approved service providers',
+      error: error.message
+    });
+  }
+};
+
+export const approveServiceProvider = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'Service provider not found'
+      });
+    }
+
+    if (user.role !== 'service_provider') {
+      return res.status(400).json({
+        success: false,
+        message: 'User is not a service provider'
+      });
+    }
+
+    user.approved = true;
+    await user.save();
+
+    res.json({
+      success: true,
+      message: 'Service provider approved successfully',
+      data: user
+    });
+  } catch (error) {
+    console.error('Approve service provider error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to approve service provider',
+      error: error.message
+    });
   }
 };
