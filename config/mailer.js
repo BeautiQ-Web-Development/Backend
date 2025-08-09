@@ -550,6 +550,54 @@ export const sendServiceStatusUpdate = async (service, serviceProvider, status, 
                 <td style="padding: 12px 0; color: #333;">${service.duration} minutes</td>
               </tr>
               ` : ''}
+              ${service.createdAt ? `
+              <tr style="border-bottom: 1px solid #eee;">
+                <td style="padding: 12px 0; font-weight: bold; color: #555;">Submitted At:</td>
+                <td style="padding: 12px 0; color: #333;">${new Date(service.createdAt).toLocaleString()}</td>
+              </tr>
+              ` : ''}
+              ${service.firstApprovedAt ? `
+              <tr style="border-bottom: 1px solid #eee;">
+                <td style="padding: 12px 0; font-weight: bold; color: #555;">First Approved At:</td>
+                <td style="padding: 12px 0; color: #333;">${new Date(service.firstApprovedAt).toLocaleString()}</td>
+              </tr>
+              ` : ''}
+              ${service.lastUpdatedAt ? `
+              <tr style="border-bottom: 1px solid #eee;">
+                <td style="padding: 12px 0; font-weight: bold; color: #555;">Last Updated At:</td>
+                <td style="padding: 12px 0; color: #333;">${new Date(service.lastUpdatedAt).toLocaleString()}</td>
+              </tr>
+              ` : ''}
+              ${service.deletedAt ? `
+              <tr style="border-bottom: 1px solid #eee;">
+                <td style="padding: 12px 0; font-weight: bold; color: #555;">Deleted At:</td>
+                <td style="padding: 12px 0; color: #333;">${new Date(service.deletedAt).toLocaleString()}</td>
+              </tr>
+              ` : ''}
+              ${service.createdAt ? `
+              <tr style="border-bottom: 1px solid #eee;">
+                <td style="padding: 12px 0; font-weight: bold; color: #555;">Submitted At:</td>
+                <td style="padding: 12px 0; color: #333;">${new Date(service.createdAt).toLocaleString()}</td>
+              </tr>
+              ` : ''}
+              ${service.firstApprovedAt ? `
+              <tr style="border-bottom: 1px solid #eee;">
+                <td style="padding: 12px 0; font-weight: bold; color: #555;">First Approved At:</td>
+                <td style="padding: 12px 0; color: #333;">${new Date(service.firstApprovedAt).toLocaleString()}</td>
+              </tr>
+              ` : ''}
+              ${service.lastUpdatedAt ? `
+              <tr style="border-bottom: 1px solid #eee;">
+                <td style="padding: 12px 0; font-weight: bold; color: #555;">Last Updated At:</td>
+                <td style="padding: 12px 0; color: #333;">${new Date(service.lastUpdatedAt).toLocaleString()}</td>
+              </tr>
+              ` : ''}
+              ${service.deletedAt ? `
+              <tr style="border-bottom: 1px solid #eee;">
+                <td style="padding: 12px 0; font-weight: bold; color: #555;">Deleted At:</td>
+                <td style="padding: 12px 0; color: #333;">${new Date(service.deletedAt).toLocaleString()}</td>
+              </tr>
+              ` : ''}
               <tr style="border-bottom: 1px solid #eee;">
                 <td style="padding: 12px 0; font-weight: bold; color: #555;">Current Status:</td>
                 <td style="padding: 12px 0;">
