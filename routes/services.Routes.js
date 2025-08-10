@@ -136,7 +136,8 @@ router.get('/provider/:providerId', async (req, res) => {
 // Admin Routes - Must come before parameterized routes
 router.get('/admin/pending', protect, authorize('admin'), getPendingServiceApprovals);
 router.get('/admin/history', protect, authorize('admin'), getServiceHistory);
-router.get('/admin/all', protect, authorize('admin'), listAllServicesForAdmin);
+// Use correct handler to fetch all services for admin
+router.get('/admin/all', protect, authorize('admin'), getAllServicesAdmin);
 router.post('/admin/:serviceId/approve', protect, authorize('admin'), approveServiceChanges);
 router.post('/admin/:serviceId/reject', protect, authorize('admin'), rejectServiceChanges);
 
