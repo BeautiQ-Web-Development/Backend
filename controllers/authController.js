@@ -6,7 +6,7 @@ import express from 'express';
 import { transporter, sendResetEmail, sendRejectionEmail, sendApprovalEmail } from '../config/mailer.js';
 
 // 🔧 CRITICAL FIX: Import BOTH functions from serial generator
-import { ensureServiceProviderHasId, generateServiceProviderSerial } from '../Utils/serialGenerator.js';
+import { generateServiceProviderSerial } from '../Utils/serialGenerator.js';
 
 // Enhanced validation helper
 const validateRegistrationData = (data, role) => {
@@ -698,7 +698,7 @@ export const approveServiceProvider = async (req, res) => {
     try {
       // Import models dynamically to avoid circular dependencies
       const Service = (await import('../models/Service.js')).default;
-      const Package = (await import('../models/Package.js')).default;
+      // const Package = (await import('../models/Package.js')).default;
 
       // Update all services created by this provider
       const serviceUpdateResult = await Service.updateMany(

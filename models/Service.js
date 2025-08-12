@@ -230,7 +230,9 @@ const serviceSchema = new mongoose.Schema({
         'update_requested', 'update_approved', 'update_rejected',
         'delete_requested', 'delete_approved', 'delete_rejected',
         'reactivate_requested', 'reactivate_approved', 'reactivate_rejected',
-        'deleted'
+        'deleted',
+        'create_rejected',
+      'pending_changes_rejected'
       ]
     },
     adminId: {
@@ -641,6 +643,54 @@ serviceSchema.methods.approveChanges = async function (adminId, reason = 'Approv
 };
 
 // ENHANCED: Reject changes with detailed tracking
+//start
+// serviceSchema.methods.rejectChanges = async function (adminId, reason, metadata = {}) {
+//   if (this.status === 'pending_approval' && !this.pendingChanges) {
+//     // Reject new service
+//     await this.updateStatus('rejected', adminId, reason, metadata);
+//     return this;
+//   }
+
+//   if (this.pendingChanges) {
+//     const rejectedChanges = { ...this.pendingChanges };
+//     const actionType = rejectedChanges.actionType;
+    
+//     // Clear pending changes without applying them
+//     this.pendingChanges = null;
+//     this.rejectedAt = new Date();
+//     this.rejectedBy = adminId;
+//     this.rejectionReason = reason;
+
+//     // Add to status history (keep current status but record rejection)
+//     this.statusHistory.push({
+//       status: this.status,
+//       changedAt: new Date(),
+//       changedBy: adminId,
+//       reason: `${actionType} request rejected: ${reason}`,
+//       metadata: {
+//         actionType: `${actionType}_rejected`,
+//         rejectedChanges: rejectedChanges,
+//         ...metadata
+//       }
+//     });
+
+//     // Add to approval history
+//     this.approvalHistory.push({
+//       action: `${actionType}_rejected`,
+//       adminId,
+//       reason,
+//       timestamp: new Date(),
+//       previousData: rejectedChanges,
+//       adminNotes: metadata.adminNotes
+//     });
+    
+//     console.log(`❌ Changes rejected: ${actionType} (Reason: ${reason})`);
+//     return await this.save();
+//   }
+
+//   throw new Error('No pending changes to reject');
+// };
+
 serviceSchema.methods.rejectChanges = async function (adminId, reason, metadata = {}) {
   if (this.status === 'pending_approval' && !this.pendingChanges) {
     // Reject new service
@@ -650,7 +700,13 @@ serviceSchema.methods.rejectChanges = async function (adminId, reason, metadata 
 
   if (this.pendingChanges) {
     const rejectedChanges = { ...this.pendingChanges };
-    const actionType = rejectedChanges.actionType;
+    let actionType = rejectedChanges.actionType;
+    
+    // FIX: Handle cases where actionType might be undefined
+    if (!actionType) {
+      actionType = 'pending_changes'; // fallback value
+      console.warn('⚠️ ActionType was undefined, using fallback');
+    }
     
     // Clear pending changes without applying them
     this.pendingChanges = null;
@@ -671,9 +727,9 @@ serviceSchema.methods.rejectChanges = async function (adminId, reason, metadata 
       }
     });
 
-    // Add to approval history
+    // Add to approval history with valid enum value
     this.approvalHistory.push({
-      action: `${actionType}_rejected`,
+      action: `${actionType}_rejected`,  // Now this will be valid
       adminId,
       reason,
       timestamp: new Date(),
@@ -687,6 +743,9 @@ serviceSchema.methods.rejectChanges = async function (adminId, reason, metadata 
 
   throw new Error('No pending changes to reject');
 };
+
+
+//End
 
 // Get comprehensive status summary
 serviceSchema.methods.getStatusSummary = function() {
