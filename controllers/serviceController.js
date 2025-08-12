@@ -734,6 +734,144 @@ export const updateService = async (req, res) => {
 //     });
 //   }
 // };
+// export const approveServiceChanges = async (req, res) => {
+//   try {
+//     const { serviceId } = req.params;
+//     const { reason = 'Approved by admin', notifyProvider = true } = req.body;
+    
+//     console.log(`✅ Admin approving service ${serviceId} with reason: "${reason}"`);
+    
+//     const service = await Service.findById(serviceId).populate('serviceProvider', 'fullName businessName emailAddress');
+    
+//     if (!service) {
+//       return res.status(404).json({
+//         success: false,
+//         message: 'Service not found.',
+//         error: 'SERVICE_NOT_FOUND'
+//       });
+//     }
+    
+//     console.log('🔍 Service before approval:', {
+//       id: service._id,
+//       name: service.name,
+//       status: service.status,
+//       serviceId: service.serviceId,
+//       isActive: service.isActive,
+//       hasPendingChanges: !!service.pendingChanges
+//     });
+    
+//     const now = new Date();
+//     let emailActionType = 'approval';
+//     let actionDescription = 'Service approved';
+
+//     // Case 1: Approving a brand new service
+//     if (service.status === 'pending_approval' && !service.pendingChanges) {
+//       actionDescription = 'New service approved and activated.';
+//       emailActionType = 'approval';
+      
+//       // Use the model's updateStatus method for new service approval
+//       await service.updateStatus('approved', req.user.userId, reason.trim(), {
+//         adminNotes: 'Admin approved new service submission'
+//       });
+//     } 
+//     // Case 2: Approving pending changes on an existing service
+//     //End
+//     // else if (service.pendingChanges) {
+//     //   const { actionType: pendingAction } = service.pendingChanges;
+//     //   actionDescription = `Pending ${pendingAction} request approved.`;
+//     //   emailActionType = `${pendingAction}_approval`;
+      
+//     //   // Use the model's approveChanges method
+//     //   await service.approveChanges(req.user.userId, reason.trim(), {
+//     //     adminNotes: 'Admin approved pending changes'
+//     //   });
+//     // } 
+//     // Case 2: Rejecting pending changes on an approved service
+// else if (service.pendingChanges) {
+//   const { actionType: pendingAction } = service.pendingChanges;
+  
+//   // FIX: Handle undefined actionType
+//   if (!pendingAction) {
+//     console.error('❌ Pending changes found but actionType is undefined:', service.pendingChanges);
+//     return res.status(400).json({
+//       success: false,
+//       message: 'Invalid pending changes: action type not specified.',
+//       error: 'INVALID_PENDING_CHANGES'
+//     });
+//   }
+  
+//   actionDescription = `Pending ${pendingAction} request rejected.`;
+//   emailActionType = `${pendingAction}_rejection`;
+  
+//   // Use the model's rejectChanges method instead of manual updates
+//   await service.rejectChanges(req.user.userId, reason.trim(), {
+//     adminNotes: 'Admin rejected pending changes'
+//   });
+// }
+//     //start
+//     else {
+//       return res.status(409).json({
+//         success: false,
+//         message: 'This service is not pending any changes that can be approved.',
+//         error: 'NO_PENDING_CHANGES'
+//       });
+//     }
+    
+//     console.log('✅ Service approval processed:', {
+//       id: service._id,
+//       serviceId: service.serviceId,
+//       status: service.status,
+//       isActive: service.isActive,
+//       availabilityStatus: service.availabilityStatus,
+//       approvalDate: service.approvalDate,
+//       hasPendingChanges: !!service.pendingChanges
+//     });
+    
+//     // Send email notification if requested
+//     if (notifyProvider) {
+//       try {
+//         const providerData = await User.findById(service.serviceProvider._id).select('fullName businessName emailAddress');
+//         await sendServiceStatusUpdate(service, providerData, 'approved', reason.trim(), emailActionType);
+//         console.log(`✅ Approval notification sent for service ${service._id}`);
+//       } catch (emailError) {
+//         console.error(`❌ Failed to send approval notification for service ${service._id}:`, emailError);
+//       }
+//     }
+    
+//     // Return complete updated service data
+//     const updatedService = await Service.findById(service._id)
+//       .populate('serviceProvider', 'fullName businessName emailAddress mobileNumber businessType city isOnline serviceProviderId')
+//       .lean();
+
+//     return res.json({
+//       success: true,
+//       message: `${actionDescription} The provider has been ${notifyProvider ? 'notified' : 'not notified'}.`,
+//       service: updatedService,
+//       approvalDetails: {
+//         approvedAt: now,
+//         approvedBy: req.user.userId,
+//         reason: reason.trim(),
+//         serviceId: service.serviceId,
+//         notificationSent: notifyProvider,
+//         actionType: emailActionType
+//       }
+//     });
+
+//   } catch (error) {
+//     console.error('❌ Error approving service:', error);
+//     res.status(500).json({
+//       success: false,
+//       message: 'Failed to approve service.',
+//       error: 'SERVICE_APPROVAL_ERROR',
+//       details: process.env.NODE_ENV === 'development' ? error.message : undefined
+//     });
+//   }
+// };
+// //End
+
+
+
+
 export const approveServiceChanges = async (req, res) => {
   try {
     const { serviceId } = req.params;
@@ -757,59 +895,170 @@ export const approveServiceChanges = async (req, res) => {
       status: service.status,
       serviceId: service.serviceId,
       isActive: service.isActive,
-      hasPendingChanges: !!service.pendingChanges
+      hasPendingChanges: !!service.pendingChanges,
+      pendingChanges: service.pendingChanges
     });
     
     const now = new Date();
     let emailActionType = 'approval';
     let actionDescription = 'Service approved';
 
-    // Case 1: Approving a brand new service
-    if (service.status === 'pending_approval' && !service.pendingChanges) {
+    // CRITICAL: Generate Service ID if not already assigned
+    if (!service.serviceId) {
+      service.serviceId = await generateServiceSerial();
+      console.log(`🆔 Assigned Service ID: ${service.serviceId} during approval`);
+    }
+
+    // Case 1: Approving a brand new service (no pending changes or empty/malformed pending changes)
+    if (service.status === 'pending_approval' && 
+        (!service.pendingChanges || 
+         Object.keys(service.pendingChanges).length === 0 || 
+         (!service.pendingChanges.actionType && !service.pendingChanges.requestType))) {
+      
       actionDescription = 'New service approved and activated.';
       emailActionType = 'approval';
       
-      // Use the model's updateStatus method for new service approval
-      await service.updateStatus('approved', req.user.userId, reason.trim(), {
-        adminNotes: 'Admin approved new service submission'
+      // Clear any malformed pending changes
+      if (service.pendingChanges) {
+        console.log('🔧 Clearing malformed/empty pendingChanges object during approval');
+        service.pendingChanges = null;
+      }
+      
+      // Set approved status and all related fields
+      service.status = 'approved';
+      service.isActive = true;
+      service.availabilityStatus = 'Available';
+      service.approvalDate = now;
+      
+      // Set first approval timestamp
+      if (!service.firstApprovedAt) {
+        service.firstApprovedAt = now;
+      }
+      
+      // Update serviceProviderId if available
+      if (service.serviceProvider?.serviceProviderId) {
+        service.serviceProviderId = service.serviceProvider.serviceProviderId;
+      }
+      
+      service.statusHistory.push({ 
+        status: 'approved', 
+        changedAt: now, 
+        changedBy: req.user.userId, 
+        reason: `Admin approved: ${reason.trim()}`
+      });
+      
+      service.approvalHistory.push({ 
+        action: 'approved', 
+        adminId: req.user.userId, 
+        reason: reason.trim(), 
+        timestamp: now 
       });
     } 
     // Case 2: Approving pending changes on an existing service
-    //End
-    // else if (service.pendingChanges) {
-    //   const { actionType: pendingAction } = service.pendingChanges;
-    //   actionDescription = `Pending ${pendingAction} request approved.`;
-    //   emailActionType = `${pendingAction}_approval`;
+    else if (service.pendingChanges && Object.keys(service.pendingChanges).length > 0) {
+      // FIX: Handle undefined actionType by checking both actionType and requestType
+      const pendingAction = service.pendingChanges.actionType || service.pendingChanges.requestType;
       
-    //   // Use the model's approveChanges method
-    //   await service.approveChanges(req.user.userId, reason.trim(), {
-    //     adminNotes: 'Admin approved pending changes'
-    //   });
-    // } 
-    // Case 2: Rejecting pending changes on an approved service
-else if (service.pendingChanges) {
-  const { actionType: pendingAction } = service.pendingChanges;
-  
-  // FIX: Handle undefined actionType
-  if (!pendingAction) {
-    console.error('❌ Pending changes found but actionType is undefined:', service.pendingChanges);
-    return res.status(400).json({
-      success: false,
-      message: 'Invalid pending changes: action type not specified.',
-      error: 'INVALID_PENDING_CHANGES'
-    });
-  }
-  
-  actionDescription = `Pending ${pendingAction} request rejected.`;
-  emailActionType = `${pendingAction}_rejection`;
-  
-  // Use the model's rejectChanges method instead of manual updates
-  await service.rejectChanges(req.user.userId, reason.trim(), {
-    adminNotes: 'Admin rejected pending changes'
-  });
-}
-    //start
-    else {
+      if (!pendingAction) {
+        console.error('❌ Pending changes found but actionType is undefined:', service.pendingChanges);
+        console.log('🔧 Clearing malformed pendingChanges and treating as new service approval');
+        
+        // Clear the malformed pending changes and treat as new service approval
+        service.pendingChanges = null;
+        
+        // Treat this as a new service approval
+        actionDescription = 'New service approved (cleared malformed pending changes).';
+        emailActionType = 'approval';
+        
+        service.status = 'approved';
+        service.isActive = true;
+        service.availabilityStatus = 'Available';
+        service.approvalDate = now;
+        
+        if (!service.firstApprovedAt) {
+          service.firstApprovedAt = now;
+        }
+        
+        if (service.serviceProvider?.serviceProviderId) {
+          service.serviceProviderId = service.serviceProvider.serviceProviderId;
+        }
+        
+        service.statusHistory.push({ 
+          status: 'approved', 
+          changedAt: now, 
+          changedBy: req.user.userId, 
+          reason: `Admin approved (cleared malformed pending changes): ${reason.trim()}`
+        });
+        
+        service.approvalHistory.push({ 
+          action: 'approved', 
+          adminId: req.user.userId, 
+          reason: reason.trim(), 
+          timestamp: now 
+        });
+      } else {
+        // Valid pending changes with proper actionType
+        const { changes } = service.pendingChanges;
+        actionDescription = `Pending ${pendingAction} request approved.`;
+        emailActionType = `${pendingAction}_approval`;
+        
+        if (pendingAction === 'update') {
+          // Apply pending changes
+          if (changes && typeof changes === 'object') {
+            Object.keys(changes).forEach(key => {
+              if (key !== '_id' && key !== 'serviceProvider' && changes[key] !== undefined) {
+                service[key] = changes[key];
+              }
+            });
+          }
+          
+          service.status = 'approved';
+          service.isActive = true;
+          service.availabilityStatus = 'Available';
+          service.lastUpdatedAt = now;
+          
+        } else if (pendingAction === 'delete') {
+          // Handle deletion approval
+          service.status = 'deleted';
+          service.isActive = false;
+          service.availabilityStatus = 'No Longer Available';
+          service.deletedAt = now;
+          service.deletedBy = req.user.userId;
+          service.isVisibleToProvider = true; // Keep visible for audit
+          
+        } else if (pendingAction === 'reactivate') {
+          // Handle reactivation approval
+          service.status = 'approved';
+          service.isActive = true;
+          service.availabilityStatus = 'Available';
+          service.isVisibleToProvider = true;
+          service.reactivatedAt = now;
+          service.reactivatedBy = req.user.userId;
+          
+          // Clear deletion fields
+          service.deletedAt = null;
+          service.deletedBy = null;
+        }
+        
+        service.statusHistory.push({ 
+          status: service.status,
+          changedAt: now, 
+          changedBy: req.user.userId, 
+          reason: `Admin approved ${pendingAction}: ${reason.trim()}`
+        });
+        
+        service.approvalHistory.push({ 
+          action: `${pendingAction}_approved`, 
+          adminId: req.user.userId, 
+          reason: reason.trim(), 
+          timestamp: now,
+          appliedChanges: changes
+        });
+
+        // Clear pending changes
+        service.pendingChanges = null;
+      }
+    } else {
       return res.status(409).json({
         success: false,
         message: 'This service is not pending any changes that can be approved.',
@@ -817,29 +1066,32 @@ else if (service.pendingChanges) {
       });
     }
     
+    // CRITICAL: Save the service with all updates
+    const savedService = await service.save();
+    
     console.log('✅ Service approval processed:', {
-      id: service._id,
-      serviceId: service.serviceId,
-      status: service.status,
-      isActive: service.isActive,
-      availabilityStatus: service.availabilityStatus,
-      approvalDate: service.approvalDate,
-      hasPendingChanges: !!service.pendingChanges
+      id: savedService._id,
+      serviceId: savedService.serviceId,
+      status: savedService.status,
+      isActive: savedService.isActive,
+      availabilityStatus: savedService.availabilityStatus,
+      approvalDate: savedService.approvalDate,
+      hasPendingChanges: !!savedService.pendingChanges
     });
     
     // Send email notification if requested
     if (notifyProvider) {
       try {
-        const providerData = await User.findById(service.serviceProvider._id).select('fullName businessName emailAddress');
-        await sendServiceStatusUpdate(service, providerData, 'approved', reason.trim(), emailActionType);
-        console.log(`✅ Approval notification sent for service ${service._id}`);
+        const providerData = await User.findById(savedService.serviceProvider._id).select('fullName businessName emailAddress');
+        await sendServiceStatusUpdate(savedService, providerData, 'approved', reason.trim(), emailActionType);
+        console.log(`✅ Approval notification sent for service ${savedService._id}`);
       } catch (emailError) {
-        console.error(`❌ Failed to send approval notification for service ${service._id}:`, emailError);
+        console.error(`❌ Failed to send approval notification for service ${savedService._id}:`, emailError);
       }
     }
     
     // Return complete updated service data
-    const updatedService = await Service.findById(service._id)
+    const updatedService = await Service.findById(savedService._id)
       .populate('serviceProvider', 'fullName businessName emailAddress mobileNumber businessType city isOnline serviceProviderId')
       .lean();
 
@@ -851,7 +1103,7 @@ else if (service.pendingChanges) {
         approvedAt: now,
         approvedBy: req.user.userId,
         reason: reason.trim(),
-        serviceId: service.serviceId,
+        serviceId: savedService.serviceId,
         notificationSent: notifyProvider,
         actionType: emailActionType
       }
@@ -867,7 +1119,14 @@ else if (service.pendingChanges) {
     });
   }
 };
-//End
+
+
+
+
+
+
+
+
 // Delete service with proper soft deletion
 export const deleteService = async (req, res) => {
   try {
