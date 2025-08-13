@@ -44,6 +44,15 @@ const userSchema = new Schema({
     type: String,
     required: true
   },
+  nicNumber: {
+    type: String,
+    required: true
+  },
+  customerId: {                         // ← new field
+    type: String,
+    unique: true,
+    sparse: true
+  },
   role: {
     type: String,
     enum: ['customer', 'serviceProvider', 'admin'],
@@ -107,10 +116,6 @@ const userSchema = new Schema({
     required: function() { return this.role === 'serviceProvider'; }
   },
   mobileNumber: {
-    type: String,
-    required: function() { return this.role === 'serviceProvider'; }
-  },
-  nicNumber: {
     type: String,
     required: function() { return this.role === 'serviceProvider'; }
   },
@@ -198,10 +203,30 @@ userSchema.pre('save', function(next) {
   next();
 });
 
+// ensure index for customerId
+userSchema.index({ customerId: 1 }, { unique: true, sparse: true });
+
+// AUTO-GENERATE customerId for new customers and log it
+userSchema.pre('save', async function(next) {
+  if (this.isNew && this.role === 'customer') {
+    const last = await this.constructor
+      .findOne({ customerId: { $regex: /^Cust_\d{3}$/ } })
+      .sort({ customerId: -1 });
+    let num = 1;
+    if (last?.customerId) {
+      num = parseInt(last.customerId.split('_')[1], 10) + 1;
+    }
+    this.customerId = `Cust_${num.toString().padStart(3, '0')}`;
+    console.log(`✅ [CustomerID] Assigned ${this.customerId} to new customer (${this.emailAddress || this._id})`);
+  }
+  next();
+});
+
 // Index for faster queries
 userSchema.index({ emailAddress: 1, role: 1 });
 userSchema.index({ role: 1, approvalStatus: 1 });
 userSchema.index({ serviceProviderId: 1 }, { sparse: true }); // Sparse index for Provider ID
+userSchema.index({ customerId: 1 }, { unique: true, sparse: true });
 
 // Method to compare password
 userSchema.methods.comparePassword = async function(candidatePassword) {

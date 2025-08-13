@@ -17,9 +17,9 @@ import {
 } from './controllers/authController.js';
 import authRoutes from './routes/auth.Routes.js';
 import serviceRoutes from './routes/services.Routes.js';
-import packageRoutes from './routes/packages.Routes.js';
+// import packageRoutes from './routes/packages.Routes.js';
 import notificationRoutes from './routes/notifications.Routes.js';
-import { transporter } from './config/mailer.js';
+// import { transporter } from './config/mailer.js';
 
 dotenv.config();
 const app = express();
@@ -36,11 +36,14 @@ mongoose.connect(process.env.MONGODB_URI)
 // Middleware
 app.use(cors({
   origin: ['http://localhost:3000', 'http://127.0.0.1:3000'],
-  credentials: true
+  credentials: true,
+  // allow custom headers so JWT can be sent in Authorization header
+  allowedHeaders: ['Content-Type', 'Authorization']
 }));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(bodyParser.json());
+app.use(bodyParser.urlencoded({ extended: true }));
 
 // Serve static files for uploads
 app.use('/uploads', express.static('uploads'));
@@ -99,7 +102,7 @@ app.use('/api/auth', authRoutes);
 
 // Service routes - Apply auth middleware properly
 app.use('/api/services', serviceRoutes);
-app.use('/api/packages', packageRoutes);
+// app.use('/api/packages', packageRoutes);
 app.use('/api/notifications', notificationRoutes);
 
 // Health check endpoint

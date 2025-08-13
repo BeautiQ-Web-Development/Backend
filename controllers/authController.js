@@ -3,10 +3,10 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import User from '../models/User.js';
 import express from 'express';
-import { transporter, sendResetEmail, sendRejectionEmail, sendApprovalEmail } from '../config/mailer.js';
+import {  sendResetEmail, sendRejectionEmail, sendApprovalEmail } from '../config/mailer.js';
 
 // 🔧 CRITICAL FIX: Import BOTH functions from serial generator
-import { ensureServiceProviderHasId, generateServiceProviderSerial } from '../Utils/serialGenerator.js';
+import { generateServiceProviderSerial } from '../Utils/serialGenerator.js';
 
 // Enhanced validation helper
 const validateRegistrationData = (data, role) => {
@@ -31,6 +31,8 @@ const validateRegistrationData = (data, role) => {
     if (!data.city) errors.push('City is required');
     if (!data.nicNumber) errors.push('NIC number is required');
     if (!data.mobileNumber) errors.push('Mobile number is required');
+  } else if (role === 'customer') {
+    if (!data.nicNumber) errors.push('NIC number is required'); // ← customer NIC validation
   }
   
   return errors;
@@ -49,13 +51,13 @@ export const register = async (req, res) => {
       // Common fields
       currentAddress,
       mobileNumber,
+      nicNumber,      // ← pull NIC from body
       // Service provider specific fields
       businessName,
       businessDescription,
       businessType,
       city,
       homeAddress,
-      nicNumber,
       services,
       location,
       experienceYears,
@@ -125,6 +127,7 @@ export const register = async (req, res) => {
     // Add common fields
     if (currentAddress) userData.currentAddress = currentAddress;
     if (mobileNumber) userData.mobileNumber = mobileNumber;
+    if (nicNumber) userData.nicNumber = nicNumber;      // ← store NIC
 
     // Add service provider specific fields
     if (role === 'serviceProvider') {
@@ -172,7 +175,6 @@ export const register = async (req, res) => {
       userData.businessType = businessType;
       userData.city = city;
       userData.homeAddress = homeAddress;
-      userData.nicNumber = nicNumber;
       userData.services = parsedServices;
       userData.location = parsedLocation;
       userData.experience = experienceData;
@@ -698,7 +700,7 @@ export const approveServiceProvider = async (req, res) => {
     try {
       // Import models dynamically to avoid circular dependencies
       const Service = (await import('../models/Service.js')).default;
-      const Package = (await import('../models/Package.js')).default;
+      // const Package = (await import('../models/Package.js')).default;
 
       // Update all services created by this provider
       const serviceUpdateResult = await Service.updateMany(
