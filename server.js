@@ -19,7 +19,7 @@ import authRoutes from './routes/auth.Routes.js';
 import serviceRoutes from './routes/services.Routes.js';
 // import packageRoutes from './routes/packages.Routes.js';
 import notificationRoutes from './routes/notifications.Routes.js';
-import { transporter } from './config/mailer.js';
+// import { transporter } from './config/mailer.js';
 
 dotenv.config();
 const app = express();

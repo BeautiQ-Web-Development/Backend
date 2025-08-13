@@ -34,34 +34,34 @@ export const generateServiceSerial = async () => {
   }
 };
 
-// Generate Service Provider Serial (Different from Service Serial)
+// Generate Service Provider Serial (Fixed to match SP### format)
 export const generateServiceProviderSerial = async () => {
   try {
     console.log('🔍 generateServiceProviderSerial called');
     
-    const User = (await import('../models/User.js')).default;
-    
     // Check existing service provider IDs in User model (ONLY approved ones)
-    // Using SPR prefix for Service Provider IDs to distinguish from Service IDs
+    // FIXED: Using SP prefix (not SPR) to match User model validation
     const lastProvider = await User.findOne({
       role: 'serviceProvider',
       approvalStatus: 'approved',
-      serviceProviderId: { $regex: /^SPR\d{3}$/ }
+      serviceProviderId: { $regex: /^SP\d{3}$/ } // SP followed by exactly 3 digits
     }).sort({ serviceProviderId: -1 });
     
     let nextNumber = 1;
     if (lastProvider && lastProvider.serviceProviderId) {
-      const lastNumber = parseInt(lastProvider.serviceProviderId.replace('SPR', ''), 10);
+      const lastNumber = parseInt(lastProvider.serviceProviderId.replace('SP', ''), 10);
       nextNumber = lastNumber + 1;
     }
     
-    const newId = `SPR${nextNumber.toString().padStart(3, '0')}`;
+    // FIXED: Use SP prefix (not SPR) to match User model validation
+    const newId = `SP${nextNumber.toString().padStart(3, '0')}`;
     console.log('✅ Generated new Provider ID:', newId);
     return newId;
     
   } catch (error) {
     console.error('❌ Error generating service provider serial:', error);
-    const fallbackId = `SPR${Date.now().toString().slice(-3)}`;
+    // FIXED: Use SP prefix in fallback too
+    const fallbackId = `SP${Date.now().toString().slice(-3)}`;
     console.log('⚠️ Using fallback Provider ID:', fallbackId);
     return fallbackId;
   }
