@@ -8,13 +8,10 @@ import {
   createService,
   updateService,
   deleteService, // ✅ Now exported from controller
-  reactivateService,
   getPendingServiceApprovals,
   getServiceHistory,
   approveServiceChanges,
   rejectServiceChanges,
-  listApprovedServices,
-  listAllServicesForAdmin,
   uploadServiceImages
 } from '../controllers/serviceController.js';
 import { protect, authorize, rateLimit } from '../middleware/authMiddleware.js';
@@ -136,7 +133,10 @@ router.get('/provider/:providerId', async (req, res) => {
 // Admin Routes - Must come before parameterized routes
 router.get('/admin/pending', protect, authorize('admin'), getPendingServiceApprovals);
 router.get('/admin/history', protect, authorize('admin'), getServiceHistory);
-router.get('/admin/all', protect, authorize('admin'), listAllServicesForAdmin);
+// Use correct handler to fetch all services for admin
+router.get('/admin/all', protect, authorize('admin'), getAllServicesAdmin);
+
+// FIXED: Add admin approval and rejection endpoints
 router.post('/admin/:serviceId/approve', protect, authorize('admin'), approveServiceChanges);
 router.post('/admin/:serviceId/reject', protect, authorize('admin'), rejectServiceChanges);
 
@@ -173,9 +173,6 @@ router.put('/:serviceId',
 // Delete service routes - deletion of approved services requires admin approval
 // ✅ FIXED: deleteService is now properly exported
 router.delete('/:serviceId', protect, authorize('serviceProvider'), requireServiceOwnership, deleteService);
-
-// Reactivate route - requires admin approval
-router.post('/:serviceId/reactivate', protect, authorize('serviceProvider'), requireServiceOwnership, reactivateService);
 
 // Individual service routes
 router.get('/:serviceId', protect, getServiceById);
