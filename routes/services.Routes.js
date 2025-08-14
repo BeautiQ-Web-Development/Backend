@@ -16,6 +16,7 @@ import {
 } from '../controllers/serviceController.js';
 import { protect, authorize, rateLimit } from '../middleware/authMiddleware.js';
 import { requireServiceOwnership } from '../middleware/serviceMiddleware.js';
+import { getAvailableSlots } from '../controllers/appointmentController.js';
 
 const router = express.Router();
 
@@ -176,6 +177,8 @@ router.delete('/:serviceId', protect, authorize('serviceProvider'), requireServi
 
 // Individual service routes
 router.get('/:serviceId', protect, getServiceById);
+// New endpoint to get available slots for a service
+router.get('/:serviceId/available-slots', getAvailableSlots);
 
 // Serve service images with error handling
 router.use('/images', (req, res, next) => {
