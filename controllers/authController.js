@@ -1,11 +1,20 @@
-//controllers/authController.js - CLEAN VERSION WITHOUT DUPLICATES
+//controllers/authController.js - COMPLETELY FIXED VERSION WITH PROPER ACCOUNT DELETION
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import User from '../models/User.js';
 import express from 'express';
-import {  sendResetEmail, sendRejectionEmail, sendApprovalEmail } from '../config/mailer.js';
+import {  
+  sendResetEmail, 
+  sendRejectionEmail, 
+  sendApprovalEmail, 
+  sendCustomerUpdateApprovalEmail, 
+  sendCustomerUpdateRejectionEmail, 
+  sendAccountDeletionApprovalEmail, 
+  sendAccountDeletionRejectionEmail 
+} from '../config/mailer.js';
+import crypto from 'crypto';
 
-// 🔧 CRITICAL FIX: Import BOTH functions from serial generator
+// Import BOTH functions from serial generator
 import { generateServiceProviderSerial } from '../Utils/serialGenerator.js';
 
 // Enhanced validation helper
@@ -32,7 +41,7 @@ const validateRegistrationData = (data, role) => {
     if (!data.nicNumber) errors.push('NIC number is required');
     if (!data.mobileNumber) errors.push('Mobile number is required');
   } else if (role === 'customer') {
-    if (!data.nicNumber) errors.push('NIC number is required'); // ← customer NIC validation
+    if (!data.nicNumber) errors.push('NIC number is required');
   }
   
   return errors;
@@ -51,7 +60,7 @@ export const register = async (req, res) => {
       // Common fields
       currentAddress,
       mobileNumber,
-      nicNumber,      // ← pull NIC from body
+      nicNumber,
       // Service provider specific fields
       businessName,
       businessDescription,
@@ -121,13 +130,14 @@ export const register = async (req, res) => {
       password: hashedPassword,
       role,
       approved: (role === 'customer' || role === 'admin') ? true : false,
+      isActive: true, // CRITICAL: Set isActive to true by default
       createdAt: new Date()
     };
 
     // Add common fields
     if (currentAddress) userData.currentAddress = currentAddress;
     if (mobileNumber) userData.mobileNumber = mobileNumber;
-    if (nicNumber) userData.nicNumber = nicNumber;      // ← store NIC
+    if (nicNumber) userData.nicNumber = nicNumber;
 
     // Add service provider specific fields
     if (role === 'serviceProvider') {
@@ -209,7 +219,8 @@ export const register = async (req, res) => {
     console.log('User saved successfully:', {
       id: savedUser._id,
       role: savedUser.role,
-      approved: savedUser.approved
+      approved: savedUser.approved,
+      isActive: savedUser.isActive
     });
 
     // Create appropriate response message
@@ -228,7 +239,8 @@ export const register = async (req, res) => {
         fullName: savedUser.fullName,
         emailAddress: savedUser.emailAddress,
         role: savedUser.role,
-        approved: savedUser.approved
+        approved: savedUser.approved,
+        isActive: savedUser.isActive
       }
     });
 
@@ -266,6 +278,15 @@ export const login = async (req, res) => {
       });
     }
 
+    // CRITICAL FIX: Check if account is deactivated/deleted
+    if (user.isActive === false) {
+      return res.status(403).json({
+        success: false,
+        message: 'Your account has been deactivated. Please contact support for assistance.',
+        accountDeactivated: true
+      });
+    }
+
     // Check password
     const isPasswordValid = await bcrypt.compare(password, user.password);
     if (!isPasswordValid) {
@@ -296,7 +317,8 @@ export const login = async (req, res) => {
       { 
         userId: user._id,
         role: user.role,
-        approved: user.approved || user.approvalStatus === 'approved'
+        approved: user.approved || user.approvalStatus === 'approved',
+        isActive: user.isActive
       },
       process.env.JWT_SECRET,
       { expiresIn: '24h' }
@@ -305,7 +327,8 @@ export const login = async (req, res) => {
     console.log('Login successful for user:', {
       id: user._id,
       role: user.role,
-      approved: user.approved || user.approvalStatus === 'approved'
+      approved: user.approved || user.approvalStatus === 'approved',
+      isActive: user.isActive
     });
 
     res.json({
@@ -318,7 +341,8 @@ export const login = async (req, res) => {
         emailAddress: user.emailAddress,
         role: user.role,
         approved: user.approved || user.approvalStatus === 'approved',
-        approvalStatus: user.approvalStatus
+        approvalStatus: user.approvalStatus,
+        isActive: user.isActive
       }
     });
 
@@ -353,6 +377,15 @@ export const verifyToken = async (req, res) => {
       });
     }
 
+    // CRITICAL FIX: Check if account is deactivated
+    if (user.isActive === false) {
+      return res.status(403).json({
+        success: false,
+        message: 'Account has been deactivated',
+        accountDeactivated: true
+      });
+    }
+
     res.json({
       success: true,
       user: {
@@ -360,7 +393,8 @@ export const verifyToken = async (req, res) => {
         fullName: user.fullName,
         emailAddress: user.emailAddress,
         role: user.role,
-        approved: user.approved
+        approved: user.approved,
+        isActive: user.isActive
       }
     });
 
@@ -373,6 +407,7 @@ export const verifyToken = async (req, res) => {
   }
 };
 
+// Get user profile
 export const getProfile = async (req, res) => {
   try {
     const user = await User.findById(req.user.userId).select('-password');
@@ -384,515 +419,859 @@ export const getProfile = async (req, res) => {
       });
     }
 
-    res.json({
+    // CRITICAL FIX: Check if account is deactivated
+    if (user.isActive === false) {
+      return res.status(403).json({
+        success: false,
+        message: 'Account has been deactivated',
+        accountDeactivated: true
+      });
+    }
+    
+    res.status(200).json({
       success: true,
-      data: user
+      user
     });
-
   } catch (error) {
-    console.error('Get profile error:', error);
+    console.error('Error getting profile:', error);
     res.status(500).json({
       success: false,
-      message: 'Error retrieving profile',
+      message: 'Server error'
+    });
+  }
+};
+
+// Update user profile (pending admin approval)
+export const updateProfile = async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const updateData = { ...req.body };
+    
+    console.log('🔍 Profile update request:', {
+      userId,
+      updateFields: Object.keys(updateData),
+      updateData
+    });
+
+    // Remove sensitive fields that shouldn't be updated this way
+    delete updateData.password;
+    delete updateData._id;
+    delete updateData.role;
+    delete updateData.approved;
+    delete updateData.approvalStatus;
+    delete updateData.isActive;
+    
+    const user = await User.findById(userId);
+    
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    // Check if account is deactivated
+    if (user.isActive === false) {
+      return res.status(403).json({
+        success: false,
+        message: 'Cannot update deactivated account',
+        accountDeactivated: true
+      });
+    }
+    
+    // Store update request properly in user document
+    user.pendingUpdates = {
+      fields: updateData,
+      requestedAt: new Date(),
+      status: 'pending',
+      deleteRequested: false,
+      requestType: 'update'
+    };
+    
+    await user.save();
+    
+    // Verify the save worked
+    const savedUser = await User.findById(userId);
+    console.log('✅ Pending update saved:', {
+      userId: savedUser._id,
+      hasPendingUpdates: !!savedUser.pendingUpdates,
+      pendingStatus: savedUser.pendingUpdates?.status,
+      requestType: savedUser.pendingUpdates?.requestType
+    });
+    
+    res.status(200).json({
+      success: true,
+      message: 'Profile update request submitted successfully. Pending admin approval.'
+    });
+  } catch (error) {
+    console.error('Error updating profile:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error'
+    });
+  }
+};
+
+// // Request account deletion/deactivation
+// export const requestAccountDeletion = async (req, res) => {
+//   try {
+//     const userId = req.user.userId;
+//     const { reason } = req.body;
+    
+//     console.log('🗑️ Account deletion request:', {
+//       userId,
+//       reason: reason || 'No reason provided'
+//     });
+    
+//     const user = await User.findById(userId);
+    
+//     if (!user) {
+//       return res.status(404).json({
+//         success: false,
+//         message: 'User not found'
+//       });
+//     }
+
+//     // Check if account is already deactivated
+//     if (user.isActive === false) {
+//       return res.status(400).json({
+//         success: false,
+//         message: 'Account is already deactivated'
+//       });
+//     }
+    
+//     // Store deletion request using pendingUpdates schema
+//     user.pendingUpdates = {
+//       fields: {},
+//       requestedAt: new Date(),
+//       status: 'pending',
+//       deleteRequested: true,
+//       requestType: 'delete',
+//       reason: reason || 'No reason provided'
+//     };
+    
+//     await user.save();
+    
+//     // Verify the deletion request was saved
+//     const savedUser = await User.findById(userId);
+//     console.log('✅ Deletion request saved:', {
+//       userId: savedUser._id,
+//       hasPendingUpdates: !!savedUser.pendingUpdates,
+//       deleteRequested: savedUser.pendingUpdates?.deleteRequested,
+//       requestType: savedUser.pendingUpdates?.requestType,
+//       reason: savedUser.pendingUpdates?.reason
+//     });
+    
+//     res.status(200).json({
+//       success: true,
+//       message: 'Account deletion request submitted successfully. Pending admin review.'
+//     });
+//   } catch (error) {
+//     console.error('Error requesting account deletion:', error);
+//     res.status(500).json({
+//       success: false,
+//       message: 'Server error'
+//     });
+//   }
+// };
+
+// Request account deletion/deactivation
+export const requestAccountDeletion = async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const { reason } = req.body;
+    
+    console.log('🗑️ Account deletion request:', {
+      userId,
+      reason: reason || 'No reason provided'
+    });
+    
+    const user = await User.findById(userId);
+    
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    // Check if account is already deactivated
+    if (user.isActive === false) {
+      return res.status(400).json({
+        success: false,
+        message: 'Account is already deactivated'
+      });
+    }
+    
+    // Store deletion request using pendingUpdates schema
+    user.pendingUpdates = {
+      fields: {},
+      requestedAt: new Date(),
+      status: 'pending',
+      deleteRequested: true,
+      requestType: 'delete',
+      reason: reason || 'No reason provided'
+    };
+    
+    await user.save();
+    
+    // Verify the deletion request was saved
+    const savedUser = await User.findById(userId);
+    console.log('✅ Deletion request saved:', {
+      userId: savedUser._id,
+      hasPendingUpdates: !!savedUser.pendingUpdates,
+      deleteRequested: savedUser.pendingUpdates?.deleteRequested,
+      requestType: savedUser.pendingUpdates?.requestType,
+      reason: savedUser.pendingUpdates?.reason
+    });
+    
+    res.status(200).json({
+      success: true,
+      message: 'Account deletion request submitted successfully. Pending admin review.'
+    });
+  } catch (error) {
+    console.error('Error requesting account deletion:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error'
+    });
+  }
+};
+
+
+
+// CRITICAL FIX: ADMIN: Approve customer update request with proper account deletion
+export const approveCustomerUpdate = async (req, res) => {
+  try {
+    // Ensure admin privileges
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Unauthorized. Admin privileges required.'
+      });
+    }
+    
+    const { customerId } = req.params;
+    
+    const customer = await User.findById(customerId);
+    if (!customer) {
+      return res.status(404).json({
+        success: false,
+        message: 'Customer not found'
+      });
+    }
+    
+    if (!customer.pendingUpdates || customer.pendingUpdates.status !== 'pending') {
+      return res.status(400).json({
+        success: false,
+        message: 'No pending updates found for this customer'
+      });
+    }
+    
+    // Determine if this is a deletion request
+    const isDeletion = !!customer.pendingUpdates.deleteRequested;
+    
+    if (customer.pendingUpdates.deleteRequested) {
+      // CRITICAL FIX: For account deletion, mark as INACTIVE and prevent login
+      customer.isActive = false; // This prevents login
+      customer.deletedAt = new Date();
+      customer.deletionReason = customer.pendingUpdates.reason || 'Account deletion requested by customer';
+      
+      // Add to status history
+      if (!customer.statusHistory) customer.statusHistory = [];
+      customer.statusHistory.push({
+        status: 'deleted',
+        timestamp: new Date(),
+        changedBy: req.user.userId,
+        reason: 'Account deletion request approved by admin'
+      });
+      
+      console.log('🗑️ Account marked as INACTIVE:', {
+        customerId: customer._id,
+        isActive: customer.isActive,
+        deletedAt: customer.deletedAt,
+        deletionReason: customer.deletionReason
+      });
+      
+      // Send deletion approval email
+      try {
+        await sendAccountDeletionApprovalEmail(customer);
+        console.log('✅ Account deletion approval email sent');
+      } catch (emailError) {
+        console.error('❌ Failed to send deletion approval email:', emailError);
+      }
+    } else {
+      // Handle update request - Apply the pending updates
+      const updates = customer.pendingUpdates.fields;
+      const previousValues = {};
+      
+      Object.keys(updates).forEach(key => {
+        if (updates[key] !== undefined) {
+          // Store previous value for history
+          previousValues[key] = customer[key];
+          // Update the field
+          customer[key] = updates[key];
+        }
+      });
+      
+      // Send update approval email
+      try {
+        await sendCustomerUpdateApprovalEmail(customer, updates);
+        console.log('✅ Profile update approval email sent');
+      } catch (emailError) {
+        console.error('❌ Failed to send update approval email:', emailError);
+      }
+    }
+    
+    // Mark the pending updates as approved
+    customer.pendingUpdates.status = 'approved';
+    customer.pendingUpdates.approvedAt = new Date();
+    customer.pendingUpdates.approvedBy = req.user.userId;
+    
+    // Save first, then clear pending updates
+    await customer.save();
+    
+    // Clear pending updates after successful approval
+    customer.pendingUpdates = null;
+    await customer.save();
+    
+    console.log(`✅ Customer ${isDeletion ? 'deletion' : 'update'} approved successfully`);
+    
+    res.status(200).json({
+      success: true,
+      message: isDeletion
+        ? 'Account deletion request approved successfully. Customer account has been deactivated.'
+        : 'Profile update request approved successfully',
+      customer: customer
+    });
+    
+  } catch (error) {
+    console.error('Error approving customer update:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error'
+    });
+  }
+};
+
+// CRITICAL FIX: ADMIN: Reject customer update request with email notification
+export const rejectCustomerUpdate = async (req, res) => {
+  try {
+    // Ensure admin privileges
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Unauthorized. Admin privileges required.'
+      });
+    }
+    
+    const { customerId } = req.params;
+    const { rejectionReason } = req.body;
+    
+    // Validate rejection reason
+    if (!rejectionReason || rejectionReason.trim() === '') {
+      return res.status(400).json({
+        success: false,
+        message: 'Rejection reason is required'
+      });
+    }
+    
+    const customer = await User.findById(customerId);
+    if (!customer) {
+      return res.status(404).json({
+        success: false,
+        message: 'Customer not found'
+      });
+    }
+    
+    if (!customer.pendingUpdates || customer.pendingUpdates.status !== 'pending') {
+      return res.status(400).json({
+        success: false,
+        message: 'No pending updates found for this customer'
+      });
+    }
+    
+    // Determine if this is a deletion request
+    const isDeletion = !!customer.pendingUpdates.deleteRequested;
+    
+    // CRITICAL FIX: DO NOT APPLY ANY CHANGES WHEN REJECTING
+    // Just mark the pending updates as rejected, don't modify the original data
+    
+    customer.pendingUpdates.status = 'rejected';
+    customer.pendingUpdates.rejectedAt = new Date();
+    customer.pendingUpdates.rejectedBy = req.user.userId;
+    customer.pendingUpdates.rejectionReason = rejectionReason;
+    
+    // Add to status history
+    if (!customer.statusHistory) customer.statusHistory = [];
+    customer.statusHistory.push({
+      status: customer.pendingUpdates.deleteRequested ? 'deletion_rejected' : 'update_rejected',
+      timestamp: new Date(),
+      changedBy: req.user.userId,
+      reason: rejectionReason
+    });
+    
+    // CRITICAL FIX: Send notification to customer about rejection
+    try {
+      if (customer.pendingUpdates.deleteRequested) {
+        await sendAccountDeletionRejectionEmail(customer, rejectionReason);
+        console.log('✅ Account deletion rejection email sent');
+      } else {
+        await sendCustomerUpdateRejectionEmail(customer, rejectionReason);
+        console.log('✅ Profile update rejection email sent');
+      }
+    } catch (emailError) {
+      console.error('❌ Failed to send rejection email:', emailError);
+      // Don't fail the request if email fails, but log it
+    }
+    
+    // Save the rejection status first
+    await customer.save();
+    
+    // Clear pending updates after rejection
+    customer.pendingUpdates = null;
+    await customer.save();
+    
+    console.log(`✅ Customer ${isDeletion ? 'deletion' : 'update'} rejected successfully - NO CHANGES APPLIED`);
+    
+    res.status(200).json({
+      success: true,
+      message: isDeletion
+        ? 'Account deletion request rejected successfully. Customer has been notified via email.'
+        : 'Profile update request rejected successfully. Customer has been notified via email.',
+      customer: customer
+    });
+    
+  } catch (error) {
+    console.error('Error rejecting customer update:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error'
+    });
+  }
+};
+
+// Get customers with pending updates
+export const getCustomersWithPendingUpdates = async (req, res) => {
+  try {
+    // Ensure admin privileges
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Unauthorized. Admin privileges required.'
+      });
+    }
+    
+    const customers = await User.find({
+      role: 'customer',
+      'pendingUpdates.status': 'pending'
+    });
+    
+    const pendingUpdates = customers.map(customer => ({
+      _id: customer._id,
+      fullName: customer.fullName,
+      emailAddress: customer.emailAddress,
+      nicNumber: customer.nicNumber,
+      createdAt: customer.createdAt,
+      requestType: customer.pendingUpdates.deleteRequested ? 'delete' : 'update',
+      requestedAt: customer.pendingUpdates.requestedAt,
+      fields: customer.pendingUpdates.fields || {},
+      reason: customer.pendingUpdates.reason || ''
+    }));
+    
+    console.log('📊 Pending updates found:', {
+      totalCustomers: customers.length,
+      updateRequests: pendingUpdates.filter(p => p.requestType === 'update').length,
+      deleteRequests: pendingUpdates.filter(p => p.requestType === 'delete').length
+    });
+    
+    res.status(200).json({
+      success: true,
+      count: pendingUpdates.length,
+      pendingUpdates
+    });
+    
+  } catch (error) {
+    console.error('Error fetching customers with pending updates:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error'
+    });
+  }
+};
+
+// ADMIN: Get all customers
+export const getCustomers = async (req, res) => {
+  try {
+    const customers = await User.find({ role: 'customer' })
+      .select('-password')
+      .sort({ createdAt: -1 });
+
+    console.log('📊 Fetched customers:', {
+      total: customers.length,
+      withPendingUpdates: customers.filter(c => c.pendingUpdates?.status === 'pending').length,
+      activeCustomers: customers.filter(c => c.isActive !== false).length,
+      deactivatedCustomers: customers.filter(c => c.isActive === false).length
+    });
+
+    res.json({
+      success: true,
+      customers
+    });
+  } catch (error) {
+    console.error('Error fetching customers for admin:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch customers',
       error: error.message
     });
   }
 };
 
+// CRITICAL FIX: Forgot Password with proper error handling
 export const forgotPassword = async (req, res) => {
   try {
-    const { emailAddress } = req.body;
-    if (!emailAddress) {
-      return res.status(400).json({ success: false, message: 'Email address is required' });
-    }
-
-    const user = await User.findOne({ emailAddress });
-    if (!user) {
-      console.log(`Password reset requested for non-existent user: ${emailAddress}`);
-      return res.json({ success: true, message: 'If a user with that email exists, a password reset link has been sent.' });
-    }
-
-    // Generate a reset token
-    const resetToken = jwt.sign({ userId: user._id }, process.env.JWT_SECRET, { expiresIn: '1h' });
+    console.log('📧 Forgot password request received:', req.body);
     
-    // Use the helper to send the email
-    await sendResetEmail(user.emailAddress, resetToken, user.fullName);
+    const { emailAddress } = req.body;
+    
+    if (!emailAddress) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Email address is required' 
+      });
+    }
+    
+    const user = await User.findOne({ emailAddress });
 
-    console.log(`Password reset email sent to ${emailAddress}`);
+    if (!user) {
+      // To prevent user enumeration, we send a success response even if the user doesn't exist.
+      console.log(`Password reset requested for non-existent user: ${emailAddress}`);
+      return res.status(200).json({ 
+        success: true, 
+        message: 'If a user with that email exists, a reset link has been sent.' 
+      });
+    }
 
-    res.json({ success: true, message: 'If a user with that email exists, a password reset link has been sent.' });
+    // Check if account is deactivated
+    if (user.isActive === false) {
+      return res.status(403).json({
+        success: false,
+        message: 'Cannot reset password for deactivated account. Please contact support.'
+      });
+    }
 
+    // Generate reset token
+    const resetToken = crypto.randomBytes(20).toString('hex');
+    
+    // Hash token and set to database
+    user.resetPasswordToken = crypto
+      .createHash('sha256')
+      .update(resetToken)
+      .digest('hex');
+    user.resetPasswordExpire = Date.now() + 15 * 60 * 1000; // 15 minutes
+
+    await user.save({ validateBeforeSave: false });
+
+    console.log('📧 Password reset token generated for user:', {
+      userId: user._id,
+      email: user.emailAddress,
+      tokenExpiry: new Date(user.resetPasswordExpire)
+    });
+
+    // Send email with the unhashed token
+    try {
+      await sendResetEmail(user.emailAddress, resetToken, user.fullName);
+      console.log('✅ Password reset email sent successfully');
+      res.status(200).json({ 
+        success: true, 
+        message: 'Password reset email sent successfully.' 
+      });
+    } catch (emailError) {
+      console.error('❌ Failed to send password reset email:', emailError);
+      // Clear the token if email fails to prevent a dangling token
+      user.resetPasswordToken = undefined;
+      user.resetPasswordExpire = undefined;
+      await user.save({ validateBeforeSave: false });
+      res.status(500).json({ 
+        success: false, 
+        message: 'Failed to send reset email. Please try again.' 
+      });
+    }
   } catch (error) {
-    console.error('Forgot password error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Error processing forgot password request',
-      error: error.message
+    console.error('❌ Forgot password error:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Server error during password reset process.' 
     });
   }
 };
 
+// // CRITICAL FIX: Reset Password with proper token handling
+// export const resetPassword = async (req, res) => {
+//   try {
+//     const { token } = req.params;
+//     const { password } = req.body;
+
+//     console.log('🔐 Reset password attempt:', { 
+//       tokenProvided: !!token, 
+//       passwordProvided: !!password 
+//     });
+
+//     if (!password || password.length < 8) {
+//       return res.status(400).json({ 
+//         success: false, 
+//         message: 'Password must be at least 8 characters long.' 
+//       });
+//     }
+
+//     // Hash the token from the URL to match the one in the database
+//     const resetPasswordToken = crypto
+//       .createHash('sha256')
+//       .update(token)
+//       .digest('hex');
+
+//     const user = await User.findOne({
+//       resetPasswordToken,
+//       resetPasswordExpire: { $gt: Date.now() },
+//     });
+
+//     if (!user) {
+//       console.log('❌ Invalid or expired token');
+//       return res.status(400).json({ 
+//         success: false, 
+//         message: 'Invalid or expired password reset token.' 
+//       });
+//     }
+
+//     // Check if account is deactivated
+//     if (user.isActive === false) {
+//       return res.status(403).json({
+//         success: false,
+//         message: 'Cannot reset password for deactivated account. Please contact support.'
+//       });
+//     }
+
+//     console.log('✅ Valid reset token found for user:', user.emailAddress);
+
+//     // Set new password
+//     user.password = await bcrypt.hash(password, 10);
+//     user.resetPasswordToken = undefined;
+//     user.resetPasswordExpire = undefined;
+//     await user.save();
+
+//     console.log('✅ Password reset successful for user:', user.emailAddress);
+
+//     res.status(200).json({ 
+//       success: true, 
+//       message: 'Password has been reset successfully.' 
+//     });
+//   } catch (error) {
+//     console.error('❌ Reset password error:', error);
+//     res.status(500).json({ 
+//       success: false, 
+//       message: 'Server error while resetting password.' 
+//     });
+//   }
+// };
+
+// ✅ FIX 3: Update authController.js (backend)
 export const resetPassword = async (req, res) => {
   try {
-    const { resetToken, newPassword } = req.body;
+    const { token } = req.params;
+    const { password, newPassword } = req.body;
+    
+    // ✅ Support both 'password' and 'newPassword' field names
+    const passwordToUse = password || newPassword;
 
-    if (!resetToken || !newPassword) {
-      return res.status(400).json({
-        success: false,
-        message: 'Reset token and new password are required'
+    console.log('🔐 Reset password attempt:', { 
+      tokenProvided: !!token, 
+      passwordProvided: !!passwordToUse,
+      tokenPreview: token ? token.substring(0, 10) + '...' : 'none'
+    });
+
+    // ✅ Enhanced validation
+    if (!token) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Password reset token is required in URL.' 
       });
     }
 
-    // Verify the token and get the user ID
-    const decoded = jwt.verify(resetToken, process.env.JWT_SECRET);
-    
-    // Find the user by the ID from the token
-    const user = await User.findById(decoded.userId);
+    if (!passwordToUse || passwordToUse.length < 8) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Password must be at least 8 characters long.' 
+      });
+    }
+
+    // Hash the token from URL to match database
+    const resetPasswordToken = crypto
+      .createHash('sha256')
+      .update(token)
+      .digest('hex');
+
+    console.log('🔍 Looking for user with hashed token...');
+
+    const user = await User.findOne({
+      resetPasswordToken,
+      resetPasswordExpire: { $gt: Date.now() },
+    });
 
     if (!user) {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid token: User not found'
+      console.log('❌ Invalid or expired token');
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Invalid or expired password reset token. Please request a new reset link.' 
       });
     }
 
-    // Hash new password
-    const saltRounds = 10;
-    const hashedPassword = await bcrypt.hash(newPassword, saltRounds);
+    // Check if account is deactivated
+    if (user.isActive === false) {
+      return res.status(403).json({
+        success: false,
+        message: 'Cannot reset password for deactivated account. Please contact support.'
+      });
+    }
 
-    // Update password
-    user.password = hashedPassword;
+    console.log('✅ Valid reset token found for user:', user.emailAddress);
+
+    // ✅ Hash new password and save
+    user.password = await bcrypt.hash(passwordToUse, 12);
+    user.resetPasswordToken = undefined;
+    user.resetPasswordExpire = undefined;
     await user.save();
 
-    res.json({
-      success: true,
-      message: 'Password reset successfully',
-      userRole: user.role
-    });
+    console.log('✅ Password reset successful for user:', user.emailAddress);
 
+    res.status(200).json({ 
+      success: true, 
+      message: 'Password has been reset successfully. You can now log in with your new password.' 
+    });
   } catch (error) {
-    console.error('Reset password error:', error);
-    if (error.name === 'JsonWebTokenError' || error.name === 'TokenExpiredError') {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid or expired reset token. Please request a new one.',
-        error: error.message
-      });
-    }
-    res.status(500).json({
-      success: false,
-      message: 'Error resetting password',
-      error: error.message
+    console.error('❌ Reset password error:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Server error while resetting password.',
+      error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
     });
   }
 };
 
-export const getUserCounts = async (req, res) => {
+
+// ADMIN: Approve a service provider
+export const approveServiceProvider = async (req, res) => {
   try {
-    const customers = await User.countDocuments({ role: 'customer' });
-    const serviceProviders = await User.countDocuments({ 
-      role: 'serviceProvider',
-      approvalStatus: 'approved'
-    });
-    const pendingApprovals = await User.countDocuments({ 
-      role: 'serviceProvider',
-      approvalStatus: 'pending'
-    });
-    const totalUsers = await User.countDocuments();
+    const { userId } = req.params;
+    console.log(`Admin approving service provider: ${userId}`);
 
-    res.json({
-      success: true,
-      data: {
-        customers,
-        serviceProviders,
-        pendingApprovals,
-        totalUsers
-      }
-    });
+    const provider = await User.findById(userId);
+
+    if (!provider || provider.role !== 'serviceProvider') {
+      return res.status(404).json({ success: false, message: 'Service provider not found' });
+    }
+
+    if (provider.approvalStatus === 'approved') {
+        return res.status(400).json({ success: false, message: 'Service provider is already approved' });
+    }
+
+    // Generate a unique service provider ID if it doesn't exist
+    if (!provider.serviceProviderId) {
+      provider.serviceProviderId = await generateServiceProviderSerial();
+    }
+    
+    provider.approvalStatus = 'approved';
+    provider.approved = true;
+    provider.approvedAt = new Date();
+    provider.rejectionReason = undefined; // Clear any previous rejection reason
+
+    await provider.save();
+
+    // Send approval email
+    try {
+      await sendApprovalEmail(provider.emailAddress, provider.businessName, provider.fullName);
+    } catch (emailError) {
+      console.error('Failed to send approval email:', emailError);
+    }
+
+    res.json({ success: true, message: 'Service provider approved successfully', provider });
+
   } catch (error) {
-    console.error('Get user counts error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to get user counts',
-      error: error.message
-    });
+    console.error('Error approving service provider:', error);
+    res.status(500).json({ success: false, message: 'Server error while approving provider', error: error.message });
   }
 };
 
+// ADMIN: Reject a service provider
+export const rejectServiceProvider = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { reason } = req.body;
+
+    if (!reason) {
+      return res.status(400).json({ success: false, message: 'Rejection reason is required' });
+    }
+
+    const provider = await User.findById(userId);
+
+    if (!provider || provider.role !== 'serviceProvider') {
+      return res.status(404).json({ success: false, message: 'Service provider not found' });
+    }
+
+    provider.approvalStatus = 'rejected';
+    provider.approved = false;
+    provider.rejectionReason = reason;
+    provider.rejectedAt = new Date();
+
+    await provider.save();
+
+    // Send rejection email
+    try {
+      await sendRejectionEmail(provider.emailAddress, provider.businessName, provider.fullName, reason);
+    } catch (emailError) {
+      console.error('Failed to send rejection email:', emailError);
+    }
+
+    res.json({ success: true, message: 'Service provider rejected successfully', provider });
+
+  } catch (error) {
+    console.error('Error rejecting service provider:', error);
+    res.status(500).json({ success: false, message: 'Server error while rejecting provider', error: error.message });
+  }
+};
+
+// ADMIN: Get pending service providers
 export const getPendingServiceProviders = async (req, res) => {
   try {
-    const pendingProviders = await User.find({ 
+    const pendingProviders = await User.find({
       role: 'serviceProvider',
       approvalStatus: 'pending'
-    }).select('-password -resetToken -resetTokenExpiry');
+    }).select('-password');
 
     res.json({
       success: true,
-      data: pendingProviders,
       providers: pendingProviders
     });
   } catch (error) {
-    console.error('Get pending service providers error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to get pending service providers',
-      error: error.message
-    });
+    console.error('Error getting pending service providers:', error);
+    res.status(500).json({ success: false, message: 'Failed to fetch pending providers', error: error.message });
   }
 };
 
+// ADMIN: Get approved service providers
 export const getApprovedServiceProviders = async (req, res) => {
   try {
-    const { providerId } = req.query;
-    let query = { 
+    const approvedProviders = await User.find({
       role: 'serviceProvider',
       approvalStatus: 'approved'
-    };
-
-    if (providerId) {
-      query._id = providerId;
-    }
-
-    const approvedProviders = await User.find(query)
-      .select('-password -resetToken -resetTokenExpiry')
-      .select('+businessDescription +experienceYears +specialties +languages +policies +location +nicNumber +mobileNumber +homeAddress +currentAddress +businessType')
-      .lean();
+    }).select('-password');
 
     res.json({
       success: true,
-      data: approvedProviders,
       providers: approvedProviders
     });
   } catch (error) {
-    console.error('Get approved service providers error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to get approved service providers',
-      error: error.message,
-      data: [],
-      providers: []
-    });
+    console.error('Error getting approved service providers:', error);
+    res.status(500).json({ success: false, message: 'Failed to fetch approved providers', error: error.message });
   }
 };
-
-// In controllers/authController.js - Replace approveServiceProvider with this FIXED version:
-
-export const approveServiceProvider = async (req, res) => {
-  try {
-    console.log('🔍 APPROVE PROVIDER DEBUG - Start');
-    console.log('🔍 Request params:', req.params);
-    console.log('🔍 User from token:', req.user);
-
-    // Handle different parameter names from different routes
-    const { userId, requestId, providerId } = req.params;
-    const providerIdToApprove = userId || requestId || providerId;
-    
-    console.log('🔍 Extracted Provider ID to approve:', providerIdToApprove);
-
-    if (!providerIdToApprove) {
-      console.log('❌ No provider ID provided in any parameter');
-      return res.status(400).json({
-        success: false,
-        message: 'Provider ID is required'
-      });
-    }
-
-    // Validate ObjectId format
-    if (!providerIdToApprove.match(/^[0-9a-fA-F]{24}$/)) {
-      console.log('❌ Invalid ObjectId format:', providerIdToApprove);
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid provider ID format'
-      });
-    }
-    
-    console.log('🔍 Finding provider in database...');
-    const user = await User.findById(providerIdToApprove);
-    
-    if (!user) {
-      console.log('❌ Provider not found in database');
-      return res.status(404).json({
-        success: false,
-        message: 'Service provider not found'
-      });
-    }
-
-    console.log('✅ Provider found:', {
-      id: user._id,
-      name: user.fullName,
-      businessName: user.businessName,
-      role: user.role,
-      currentStatus: user.approvalStatus,
-      hasProviderId: !!user.serviceProviderId
-    });
-
-    if (user.role !== 'serviceProvider') {
-      console.log('❌ User is not a service provider');
-      return res.status(400).json({
-        success: false,
-        message: 'User is not a service provider'
-      });
-    }
-
-    if (user.approvalStatus === 'approved') {
-      console.log('⚠️ Provider already approved');
-      return res.status(400).json({
-        success: false,
-        message: 'Service provider is already approved',
-        data: {
-          id: user._id,
-          businessName: user.businessName,
-          fullName: user.fullName,
-          approvalStatus: user.approvalStatus,
-          serviceProviderId: user.serviceProviderId
-        }
-      });
-    }
-
-    // 🔧 CRITICAL FIX: Generate Provider ID BEFORE setting approval status
-    console.log('🔍 Generating Provider ID...');
-    let newProviderId;
-    
-    try {
-      // Check if user already has a Provider ID
-      if (user.serviceProviderId && 
-          user.serviceProviderId.trim() !== '' && 
-          user.serviceProviderId !== 'Not assigned') {
-        console.log('✅ Provider already has ID:', user.serviceProviderId);
-        newProviderId = user.serviceProviderId;
-      } else {
-        // Generate new Provider ID directly (without using ensureServiceProviderHasId)
-        console.log('🔍 Generating new Provider ID...');
-        newProviderId = await generateServiceProviderSerial();
-        console.log('✅ Generated new Provider ID:', newProviderId);
-      }
-    } catch (providerIdError) {
-      console.error('❌ Error generating Provider ID:', providerIdError);
-      return res.status(500).json({
-        success: false,
-        message: 'Failed to generate Provider ID',
-        error: providerIdError.message
-      });
-    }
-
-    // 🔧 NOW update approval status AND Provider ID together
-    console.log('🔍 Updating user approval status...');
-    try {
-      user.approvalStatus = 'approved';
-      user.approved = true;
-      user.serviceProviderId = newProviderId;
-      user.approvedAt = new Date();
-      user.approvedBy = req.user.userId;
-      
-      const savedUser = await user.save();
-      console.log('✅ User updated successfully with Provider ID:', newProviderId);
-    } catch (saveError) {
-      console.error('❌ Error saving user:', saveError);
-      return res.status(500).json({
-        success: false,
-        message: 'Failed to save user approval',
-        error: saveError.message
-      });
-    }
-
-    // 🔧 Update existing services and packages
-    console.log('🔍 Updating existing services and packages...');
-    try {
-      // Import models dynamically to avoid circular dependencies
-      const Service = (await import('../models/Service.js')).default;
-      // const Package = (await import('../models/Package.js')).default;
-
-      // Update all services created by this provider
-      const serviceUpdateResult = await Service.updateMany(
-        { serviceProvider: providerIdToApprove },
-        { 
-          serviceProviderId: newProviderId,
-          lastUpdatedAt: new Date()
-        }
-      );
-      console.log(`✅ Updated ${serviceUpdateResult.modifiedCount} services with Provider ID: ${newProviderId}`);
-
-      // Update all packages created by this provider
-      const packageUpdateResult = await Package.updateMany(
-        { serviceProvider: providerIdToApprove },
-        { 
-          serviceProviderId: newProviderId,
-          lastUpdatedAt: new Date()
-        }
-      );
-      console.log(`✅ Updated ${packageUpdateResult.modifiedCount} packages with Provider ID: ${newProviderId}`);
-
-      // Also fix any "Not assigned" entries
-      const serviceNotAssignedResult = await Service.updateMany(
-        { 
-          serviceProvider: providerIdToApprove,
-          serviceProviderId: 'Not assigned'
-        },
-        { serviceProviderId: newProviderId }
-      );
-      console.log(`✅ Fixed ${serviceNotAssignedResult.modifiedCount} services with 'Not assigned' Provider ID`);
-
-      const packageNotAssignedResult = await Package.updateMany(
-        { 
-          serviceProvider: providerIdToApprove,
-          serviceProviderId: 'Not assigned'
-        },
-        { serviceProviderId: newProviderId }
-      );
-      console.log(`✅ Fixed ${packageNotAssignedResult.modifiedCount} packages with 'Not assigned' Provider ID`);
-
-    } catch (updateError) {
-      console.error('⚠️ Failed to update services/packages:', updateError);
-      // Don't fail the approval process, but log the error
-    }
-
-    // Send approval email
-    console.log('🔍 Sending approval email...');
-    try {
-      await sendApprovalEmail(
-        user.emailAddress, 
-        user.businessName || user.fullName, 
-        user.fullName
-      );
-      console.log('✅ Approval email sent');
-    } catch (emailError) {
-      console.error('⚠️ Failed to send approval email:', emailError);
-      // Don't fail the approval process for email issues
-    }
-
-    console.log('🎉 Provider approval completed successfully');
-
-    res.json({
-      success: true,
-      message: 'Service provider approved successfully',
-      data: {
-        id: user._id,
-        businessName: user.businessName,
-        fullName: user.fullName,
-        approvalStatus: user.approvalStatus,
-        serviceProviderId: newProviderId,
-        approvedAt: user.approvedAt
-      }
-    });
-
-  } catch (error) {
-    console.error('❌ APPROVE PROVIDER ERROR:', error);
-    console.error('Error stack:', error.stack);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to approve service provider',
-      error: error.message,
-      details: process.env.NODE_ENV === 'development' ? error.stack : undefined
-    });
-  }
-};
-
-
-export const rejectServiceProvider = async (req, res) => {
-  try {
-    console.log('🔍 REJECT PROVIDER DEBUG - Start');
-    console.log('🔍 Request params:', req.params);
-    console.log('🔍 Request body:', req.body);
-
-    // Handle different parameter names from different routes
-    const { userId, requestId, providerId } = req.params;
-    const { reason } = req.body;
-    const providerIdToReject = userId || requestId || providerId;
-    
-    console.log('🔍 Extracted Provider ID to reject:', providerIdToReject);
-    console.log('🔍 Rejection reason:', reason);
-
-    if (!providerIdToReject) {
-      console.log('❌ No provider ID provided');
-      return res.status(400).json({
-        success: false,
-        message: 'Provider ID is required'
-      });
-    }
-
-    // Validate ObjectId format
-    if (!providerIdToReject.match(/^[0-9a-fA-F]{24}$/)) {
-      console.log('❌ Invalid ObjectId format:', providerIdToReject);
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid provider ID format'
-      });
-    }
-    
-    console.log('🔍 Finding provider in database...');
-    const providerRequest = await User.findById(providerIdToReject);
-    
-    if (!providerRequest) {
-      console.log('❌ Provider not found in database');
-      return res.status(404).json({
-        success: false,
-        message: 'Provider request not found'
-      });
-    }
-
-    console.log('✅ Provider found:', {
-      id: providerRequest._id,
-      name: providerRequest.fullName,
-      businessName: providerRequest.businessName,
-      role: providerRequest.role,
-      currentStatus: providerRequest.approvalStatus
-    });
-
-    if (providerRequest.role !== 'serviceProvider') {
-      console.log('❌ User is not a service provider');
-      return res.status(400).json({
-        success: false,
-        message: 'User is not a service provider'
-      });
-    }
-
-    // Update rejection status
-    console.log('🔍 Updating rejection status...');
-    providerRequest.approvalStatus = 'rejected';
-    providerRequest.rejectionReason = reason || 'Application did not meet requirements';
-    providerRequest.rejectedAt = new Date();
-    providerRequest.rejectedBy = req.user.userId;
-    
-    await providerRequest.save();
-    console.log('✅ Provider rejected successfully');
-
-    // Send rejection email
-    console.log('🔍 Sending rejection email...');
-    try {
-      await sendRejectionEmail(
-        providerRequest.emailAddress, 
-        providerRequest.businessName || providerRequest.fullName,
-        providerRequest.fullName,
-        reason || 'Application did not meet requirements'
-      );
-      console.log('✅ Rejection email sent');
-    } catch (emailError) {
-      console.error('⚠️ Failed to send rejection email:', emailError);
-    }
-
-    console.log('🎉 Provider rejection completed successfully');
-
-    res.json({
-      success: true,
-      message: 'Service provider request rejected successfully',
-      data: {
-        id: providerRequest._id,
-        businessName: providerRequest.businessName,
-        fullName: providerRequest.fullName,
-        approvalStatus: providerRequest.approvalStatus
-      }
-    });
-  } catch (error) {
-    console.error('❌ REJECT PROVIDER ERROR:', error);
-    console.error('Error stack:', error.stack);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to reject provider request',
-      error: error.message,
-      details: process.env.NODE_ENV === 'development' ? error.stack : undefined
-    });
-  }
-};
-
-// Export the reject function for use in notification routes
-export { rejectServiceProvider as rejectServiceProviderRequest };
