@@ -683,6 +683,31 @@ export const sendServiceNotificationToAdmin = async (serviceData, providerData) 
       </div>
     ` : '';
 
+    // Proposed changes table for update requests
+    const changesTable = serviceData.proposedChanges && serviceData.originalData ? `
+      <div style="margin: 20px 0;">
+        <h3>✏️ Proposed Changes</h3>
+        <table class="info-table" style="width:100%; border-collapse: collapse;">
+          <thead>
+            <tr style="background-color:#f0f0f0;">
+              <th style="padding:8px; text-align:left;">Field</th>
+              <th style="padding:8px; text-align:left;">Current Value</th>
+              <th style="padding:8px; text-align:left;">Updated Value</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${Object.keys(serviceData.proposedChanges).map(field => `
+            <tr>
+              <td style="padding:8px; vertical-align:top;"><strong>${field}</strong></td>
+              <td style="padding:8px; vertical-align:top;">${serviceData.originalData[field] || 'N/A'}</td>
+              <td style="padding:8px; vertical-align:top;">${serviceData.proposedChanges[field] || 'N/A'}</td>
+            </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    ` : '';
+
     // Action buttons
     const adminActions = `
       <div style="margin: 30px 0; text-align: center; padding: 20px; background-color: #f8f9fa; border-radius: 8px;">
@@ -711,6 +736,7 @@ export const sendServiceNotificationToAdmin = async (serviceData, providerData) 
       </div>
       
       ${serviceDetails}
+      ${changesTable}
       ${serviceDescription}
       ${providerDetails}
       ${adminActions}
