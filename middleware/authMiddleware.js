@@ -1,4 +1,4 @@
-//middlewares/authMiddleware.js
+//middleware/authMiddleware.js - FIXED WITH ACCOUNT STATUS CHECKS
 import jwt from 'jsonwebtoken';
 import User from '../models/User.js';
 
@@ -35,7 +35,7 @@ export const rateLimit = (maxRequests, windowMs) => {
   };
 };
 
-// Authentication middleware
+// CRITICAL FIX: Authentication middleware with account status checks
 export const protect = async (req, res, next) => {
   try {
     let token;
@@ -65,7 +65,17 @@ export const protect = async (req, res, next) => {
       });
     }
 
-    // CRITICAL FIX: Check if serviceProvider is approved
+    // CRITICAL FIX: Check if account is deactivated/deleted
+    if (user.isActive === false) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. Your account has been deactivated. Please contact support.',
+        error: 'ACCOUNT_DEACTIVATED',
+        accountDeactivated: true
+      });
+    }
+
+    // Check if serviceProvider is approved
     if (user.role === 'serviceProvider' && user.approvalStatus !== 'approved' && !user.approved) {
       return res.status(403).json({
         success: false,
@@ -77,13 +87,15 @@ export const protect = async (req, res, next) => {
     req.user = {
       userId: user._id.toString(),
       role: user.role,
-      approved: user.approved || user.approvalStatus === 'approved'
+      approved: user.approved || user.approvalStatus === 'approved',
+      isActive: user.isActive
     };
 
     console.log('Auth middleware - User authenticated:', {
       userId: req.user.userId,
       role: req.user.role,
-      approved: req.user.approved
+      approved: req.user.approved,
+      isActive: req.user.isActive
     });
 
     next();
@@ -109,7 +121,8 @@ export const authorize = (...roles) => {
     console.log('Authorization check:', {
       userRole: req.user.role,
       requiredRoles: roles,
-      hasAccess: roles.includes(req.user.role)
+      hasAccess: roles.includes(req.user.role),
+      isActive: req.user.isActive
     });
 
     if (!roles.includes(req.user.role)) {
@@ -123,6 +136,7 @@ export const authorize = (...roles) => {
     next();
   };
 };
+
 // Add this function to your auth.js
 export const debugToken = () => {
   const token = localStorage.getItem('token');
@@ -137,6 +151,7 @@ export const debugToken = () => {
   }
   return null;
 };
+
 // Backward compatibility aliases
 export const authenticateToken = protect;
 export const verifyToken = protect;

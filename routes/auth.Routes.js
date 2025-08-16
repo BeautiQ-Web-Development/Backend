@@ -1,4 +1,4 @@
-//routes/auth.Routes.js - COMPLETELY FIXED VERSION
+// routes/auth.Routes.js - Add missing password reset route
 import express from 'express';
 import multer from 'multer';
 import path from 'path';
@@ -14,7 +14,13 @@ import {
   forgotPassword,
   resetPassword,
   approveServiceProvider,
-  rejectServiceProvider
+  rejectServiceProvider,
+  updateProfile,
+  requestAccountDeletion,
+  approveCustomerUpdate,
+  rejectCustomerUpdate,
+  getCustomersWithPendingUpdates,
+  getCustomers
 } from '../controllers/authController.js';
 import User from '../models/User.js';
 
@@ -60,39 +66,56 @@ router.post('/register-admin', upload.none(), register);
 router.post('/login', login);
 router.get('/verify-token', verifyToken);
 router.get('/profile', protect, getProfile);
+
+// // CRITICAL FIX: Add the missing password reset routes
+// router.post('/forgot-password', forgotPassword);
+// router.post('/reset-password/:token', resetPassword); // Fixed: Add token parameter
+// router.put('/reset-password/:token', resetPassword); // Support both POST and PUT
+
+
+// ✅ FIX 4: Ensure routes are correct (routes/auth.Routes.js)
+// These routes should already be correct from your paste-4.txt:
 router.post('/forgot-password', forgotPassword);
-router.post('/reset-password', resetPassword);
+router.post('/reset-password/:token', resetPassword); // ✅ This is correct
+router.put('/reset-password/:token', resetPassword); // Support both POST and PUT
+
+
+
+// Profile management routes
+router.post('/update-profile', protect, updateProfile);
+router.post('/request-account-deletion', protect, requestAccountDeletion);
 
 // Public routes for service providers
 router.get('/approved-providers', getApprovedServiceProviders);
 router.get('/approved-service-providers', getApprovedServiceProviders);
 
-// 🔧 CRITICAL FIX: Provider approval routes with proper parameter mapping
+// Provider approval routes with proper parameter mapping
 router.post('/approve-request/:requestId', protect, authorize('admin'), (req, res) => {
   console.log('🔍 Auth approve-request route hit:', req.params.requestId);
-  // Map requestId to userId for the controller
   req.params.userId = req.params.requestId;
   approveServiceProvider(req, res);
 });
 
 router.put('/approve-provider/:userId', protect, authorize('admin'), (req, res) => {
   console.log('🔍 Auth approve-provider route hit:', req.params.userId);
-  // userId is already correctly named
   approveServiceProvider(req, res);
 });
 
 router.post('/reject-request/:requestId', protect, authorize('admin'), (req, res) => {
   console.log('🔍 Auth reject-request route hit:', req.params.requestId);
-  // Map requestId to userId for the controller
   req.params.userId = req.params.requestId;
   rejectServiceProvider(req, res);
 });
 
 router.put('/reject-provider/:userId', protect, authorize('admin'), (req, res) => {
   console.log('🔍 Auth reject-provider route hit:', req.params.userId);
-  // userId is already correctly named
   rejectServiceProvider(req, res);
 });
+
+// Admin routes for handling customer update and delete requests
+router.get('/admin/pending-customer-updates', protect, authorize('admin'), getCustomersWithPendingUpdates);
+router.put('/admin/approve-customer-update/:customerId', protect, authorize('admin'), approveCustomerUpdate);
+router.put('/admin/reject-customer-update/:customerId', protect, authorize('admin'), rejectCustomerUpdate);
 
 // Get user counts for admin dashboard
 router.get('/user-counts', protect, authorize('admin'), async (req, res) => {
@@ -155,25 +178,7 @@ router.get('/pending-service-providers', protect, authorize('admin'), async (req
 router.get('/pending-providers', protect, authorize('admin'), getPendingServiceProviders);
 
 // Get all customers for admin
-router.get('/customers', protect, authorize('admin'), async (req, res) => {
-  try {
-    const customers = await User.find({ role: 'customer' })
-      .select('-password')
-      .sort({ createdAt: -1 });
-
-    res.json({
-      success: true,
-      customers
-    });
-  } catch (error) {
-    console.error('Get customers error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to get customers',
-      error: error.message
-    });
-  }
-});
+router.get('/customers', protect, authorize('admin'), getCustomers);
 
 // Get all service providers for admin
 router.get('/service-providers', protect, authorize('admin'), async (req, res) => {
