@@ -1,4 +1,4 @@
-//models/User.js - FIXED VERSION WITH PROVIDER ID
+//models/User.js - UPDATED VERSION WITH PENDING UPDATES SCHEMA
 import mongoose from 'mongoose';
 import bcrypt from 'bcryptjs';
 
@@ -14,16 +14,75 @@ const serviceSubSchema = new Schema({
   location: String
 }, { _id: false });
 
-const resignationRequestSchema = new Schema({
+// ✅ NEW: Pending Updates Schema - This was missing!
+const pendingUpdatesSchema = new Schema({
+  fields: {
+    type: Schema.Types.Mixed, // Allows any type of data for flexible updates
+    default: {}
+  },
+  requestedAt: {
+    type: Date,
+    default: Date.now
+  },
   status: {
     type: String,
     enum: ['pending', 'approved', 'rejected'],
     default: 'pending'
   },
+  deleteRequested: {
+    type: Boolean,
+    default: false
+  },
+  requestType: {
+    type: String,
+    enum: ['update', 'delete'],
+    default: 'update'
+  },
+  reason: String, // For deletion requests
+  rejectionReason: String,
+  approvedAt: Date,
+  approvedBy: { type: Schema.Types.ObjectId, ref: 'User' },
+  rejectedAt: Date,
+  rejectedBy: { type: Schema.Types.ObjectId, ref: 'User' }
+}, { _id: false });
+
+// ✅ Status History Schema for tracking changes
+const statusHistorySchema = new Schema({
+  status: {
+    type: String,
+    enum: ['created', 'updated', 'deleted', 'update_rejected', 'deletion_rejected'],
+    required: true
+  },
+  timestamp: {
+    type: Date,
+    default: Date.now
+  },
+  changedBy: { 
+    type: Schema.Types.ObjectId, 
+    ref: 'User' 
+  },
   reason: String,
-  requestedAt: Date,
+  details: Schema.Types.Mixed
+}, { _id: false });
+
+// Resignation request schema
+const resignationRequestSchema = new Schema({
+  reason: {
+    type: String,
+    required: true
+  },
+  requestedAt: {
+    type: Date,
+    default: Date.now
+  },
+  status: {
+    type: String,
+    enum: ['pending', 'approved', 'rejected'],
+    default: 'pending'
+  },
   reviewedAt: Date,
-  reviewedBy: { type: Schema.Types.ObjectId, ref: 'User' }
+  reviewedBy: { type: Schema.Types.ObjectId, ref: 'User' },
+  reviewNotes: String
 }, { _id: false });
 
 const userSchema = new Schema({
@@ -48,7 +107,7 @@ const userSchema = new Schema({
     type: String,
     required: true
   },
-  customerId: {                         // ← new field
+  customerId: {
     type: String,
     unique: true,
     sparse: true
@@ -72,18 +131,32 @@ const userSchema = new Schema({
     }
   },
   
-  // 🔧 CRITICAL FIX: Service Provider ID - only generated after approval
+  // ✅ CRITICAL: Add the pending updates field
+  pendingUpdates: pendingUpdatesSchema,
+  
+  // ✅ Status history for tracking all changes
+  statusHistory: [statusHistorySchema],
+  
+  // ✅ Account status fields
+  isActive: {
+    type: Boolean,
+    default: true
+  },
+  deletedAt: Date,
+  deletionReason: String,
+  // Account deletion (resignation) requests from customers
+  resignationRequests: [resignationRequestSchema],
+  
+  // Service Provider ID - only generated after approval
   serviceProviderId: {
     type: String,
     unique: true,
-    sparse: true, // Allows multiple documents without this field
+    sparse: true,
     validate: {
       validator: function(v) {
-        // Only service providers should have this field
         if (this.role === 'serviceProvider' && this.approvalStatus === 'approved') {
           return v && v.match(/^SP\d{3}$/);
         }
-        // For non-approved providers or other roles, this field should not exist
         return !v;
       },
       message: 'Invalid service provider ID format or unauthorized provider ID assignment'
@@ -108,16 +181,14 @@ const userSchema = new Schema({
     required: function() { return this.role === 'serviceProvider'; }
   },
   currentAddress: {
-    type: String,
-    required: function() { return this.role === 'serviceProvider'; }
+    type: String
   },
   homeAddress: {
     type: String,
     required: function() { return this.role === 'serviceProvider'; }
   },
   mobileNumber: {
-    type: String,
-    required: function() { return this.role === 'serviceProvider'; }
+    type: String
   },
   
   // Service Provider services and policies
@@ -148,8 +219,8 @@ const userSchema = new Schema({
   certificatesPhotos: [String],
   
   // Password reset fields
-  resetToken: String,
-  resetTokenExpiry: Date,
+  resetPasswordToken: String,
+  resetPasswordExpire: Date,
 
   // Resignation request
   resignationRequest: resignationRequestSchema,
@@ -159,7 +230,7 @@ const userSchema = new Schema({
   rejectedAt: Date,
   rejectedBy: { type: Schema.Types.ObjectId, ref: 'User' },
 
-  // 🔧 NEW: Audit trail fields
+  // Audit trail fields
   approvedAt: Date,
   approvedBy: { type: Schema.Types.ObjectId, ref: 'User' },
 
@@ -174,17 +245,19 @@ const userSchema = new Schema({
   }
 });
 
-// 🔧 CRITICAL: Update the updatedAt field before saving
+// ✅ IMPORTANT: Update the updatedAt field before saving
 userSchema.pre('save', function(next) {
-  this.updatedAt = Date.now();
+  // Only update updatedAt if we're not just adding pending updates
+  if (!this.isModified('pendingUpdates')) {
+    this.updatedAt = Date.now();
+  }
   next();
 });
 
-// 🔧 CRITICAL: Validation middleware to ensure Provider ID rules
+// ✅ Validation middleware to ensure Provider ID rules
 userSchema.pre('save', function(next) {
   // If this is a service provider being approved, ensure they get a Provider ID
   if (this.role === 'serviceProvider' && this.approvalStatus === 'approved' && this.isModified('approvalStatus')) {
-    // The Provider ID will be generated in the approveServiceProvider function
     console.log('Service provider being approved - Provider ID will be generated');
   }
   
@@ -203,10 +276,7 @@ userSchema.pre('save', function(next) {
   next();
 });
 
-// ensure index for customerId
-userSchema.index({ customerId: 1 }, { unique: true, sparse: true });
-
-// AUTO-GENERATE customerId for new customers and log it
+// ✅ AUTO-GENERATE customerId for new customers
 userSchema.pre('save', async function(next) {
   if (this.isNew && this.role === 'customer') {
     const last = await this.constructor
@@ -222,18 +292,19 @@ userSchema.pre('save', async function(next) {
   next();
 });
 
-// Index for faster queries
+// ✅ Indexes for faster queries
 userSchema.index({ emailAddress: 1, role: 1 });
 userSchema.index({ role: 1, approvalStatus: 1 });
-userSchema.index({ serviceProviderId: 1 }, { sparse: true }); // Sparse index for Provider ID
+userSchema.index({ serviceProviderId: 1 }, { sparse: true });
 userSchema.index({ customerId: 1 }, { unique: true, sparse: true });
+userSchema.index({ 'pendingUpdates.status': 1 }); // ✅ NEW: Index for pending updates
 
-// Method to compare password
+// ✅ Method to compare password
 userSchema.methods.comparePassword = async function(candidatePassword) {
   return await bcrypt.compare(candidatePassword, this.password);
 };
 
-// 🔧 NEW: Method to check if service provider has valid ID
+// ✅ Method to check if service provider has valid ID
 userSchema.methods.hasValidProviderId = function() {
   return this.role === 'serviceProvider' && 
          this.approvalStatus === 'approved' && 
@@ -241,12 +312,31 @@ userSchema.methods.hasValidProviderId = function() {
          this.serviceProviderId.match(/^SP\d{3}$/);
 };
 
-// 🔧 NEW: Static method to get approved providers with IDs
+// ✅ Method to check if user has pending updates
+userSchema.methods.hasPendingUpdates = function() {
+  return this.pendingUpdates && this.pendingUpdates.status === 'pending';
+};
+
+// ✅ Method to get pending update type
+userSchema.methods.getPendingUpdateType = function() {
+  if (!this.hasPendingUpdates()) return null;
+  return this.pendingUpdates.deleteRequested ? 'delete' : 'update';
+};
+
+// ✅ Static method to get approved providers with IDs
 userSchema.statics.getApprovedProvidersWithIds = function() {
   return this.find({
     role: 'serviceProvider',
     approvalStatus: 'approved',
     serviceProviderId: { $exists: true, $ne: null, $ne: '' }
+  });
+};
+
+// ✅ Static method to get customers with pending updates
+userSchema.statics.getCustomersWithPendingUpdates = function() {
+  return this.find({
+    role: 'customer',
+    'pendingUpdates.status': 'pending'
   });
 };
 

@@ -4,10 +4,10 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
-// CRITICAL: Gmail Configuration Fix
+// CRITICAL FIX: Gmail Configuration Fix
 const createTransporter = () => {
   // Use App Password instead of regular Gmail password
-  const transporter = nodemailer.createTransporter({
+  const transporter = nodemailer.createTransport({
     service: 'gmail',
     host: 'smtp.gmail.com',
     port: 587,
@@ -435,6 +435,129 @@ export const sendServiceStatusUpdate = async (service, providerData, status, rea
   }
 };
 
+// Customer Profile Update Approval Email
+export const sendCustomerUpdateApprovalEmail = async (customer, approvedFields) => {
+  try {
+    const transporter = createTransporter();
+    const subject = 'Your BeautiQ Profile Update has been Approved';
+    
+    const changesList = Object.entries(approvedFields)
+      .map(([key, value]) => `<li><strong>${key.replace(/([A-Z])/g, ' $1').trim()}:</strong> ${value}</li>`)
+      .join('');
+
+    const content = `
+      <p>Dear ${customer.fullName},</p>
+      <p>We're pleased to inform you that your recent profile update request has been approved. The following changes have been applied to your account:</p>
+      <div class="success-message" style="background-color: #e8f5e9; border-left: 4px solid #4caf50; padding: 15px; margin: 15px 0; border-radius: 4px;">
+        <ul style="list-style-type: none; padding: 0;">${changesList}</ul>
+      </div>
+      <p>You can view your updated profile by logging into your BeautiQ account.</p>
+      <a href="${process.env.FRONTEND_URL || 'http://localhost:3000'}/customer-login" class="btn">Login to Your Account</a>
+    `;
+
+    const htmlContent = createEmailTemplate('Profile Update Approved', content, 'success');
+
+    await transporter.sendMail({
+      from: { name: 'BeautiQ Support', address: process.env.EMAIL_USER },
+      to: customer.emailAddress,
+      subject,
+      html: htmlContent
+    });
+    console.log(`✅ Customer update approval email sent to ${customer.emailAddress}`);
+  } catch (error) {
+    console.error(`❌ Failed to send customer update approval email:`, error);
+  }
+};
+
+// Customer Profile Update Rejection Email
+export const sendCustomerUpdateRejectionEmail = async (customer, reason) => {
+  try {
+    const transporter = createTransporter();
+    const subject = 'Action Required: Your BeautiQ Profile Update Request';
+
+    const content = `
+      <p>Dear ${customer.fullName},</p>
+      <p>We're writing to inform you that your recent profile update request could not be approved at this time. Our admin team has provided the following reason:</p>
+      <div class="rejection-reason">
+        <p><strong>Rejection Reason:</strong></p>
+        <p><em>${reason}</em></p>
+      </div>
+      <p>Please review the reason provided, make any necessary corrections, and resubmit your update request through your profile settings.</p>
+      <a href="${process.env.FRONTEND_URL || 'http://localhost:3000'}/customer-dashboard" class="btn">Go to Your Dashboard</a>
+    `;
+
+    const htmlContent = createEmailTemplate('Profile Update Rejected', content, 'error');
+
+    await transporter.sendMail({
+      from: { name: 'BeautiQ Support', address: process.env.EMAIL_USER },
+      to: customer.emailAddress,
+      subject,
+      html: htmlContent
+    });
+    console.log(`✅ Customer update rejection email sent to ${customer.emailAddress}`);
+  } catch (error) {
+    console.error(`❌ Failed to send customer update rejection email:`, error);
+  }
+};
+
+// Account Deletion Approval Email
+export const sendAccountDeletionApprovalEmail = async (customer) => {
+  try {
+    const transporter = createTransporter();
+    const subject = 'Your BeautiQ Account Deletion Request has been Processed';
+
+    const content = `
+      <p>Dear ${customer.fullName},</p>
+      <p>As you requested, your account on the BeautiQ platform has been deactivated. This action was approved by our admin team.</p>
+      <p>We're sorry to see you go. If you change your mind in the future, you will need to create a new account.</p>
+      <p>Thank you for being a part of our community.</p>
+    `;
+
+    const htmlContent = createEmailTemplate('Account Deactivated', content, 'warning');
+
+    await transporter.sendMail({
+      from: { name: 'BeautiQ Support', address: process.env.EMAIL_USER },
+      to: customer.emailAddress,
+      subject,
+      html: htmlContent
+    });
+    console.log(`✅ Account deletion approval email sent to ${customer.emailAddress}`);
+  } catch (error) {
+    console.error(`❌ Failed to send account deletion approval email:`, error);
+  }
+};
+
+// Account Deletion Rejection Email
+export const sendAccountDeletionRejectionEmail = async (customer, reason) => {
+  try {
+    const transporter = createTransporter();
+    const subject = 'Update on Your BeautiQ Account Deletion Request';
+
+    const content = `
+      <p>Dear ${customer.fullName},</p>
+      <p>We're writing to inform you that your request to delete your account could not be processed at this time. Our admin team has provided the following reason:</p>
+      <div class="rejection-reason">
+        <p><strong>Reason:</strong></p>
+        <p><em>${reason}</em></p>
+      </div>
+      <p>Your account remains active. If you have any questions or wish to resolve this, please contact our support team.</p>
+      <a href="mailto:${process.env.ADMIN_EMAIL || 'support@beautiq.com'}" class="btn">Contact Support</a>
+    `;
+
+    const htmlContent = createEmailTemplate('Account Deletion Request Rejected', content, 'error');
+
+    await transporter.sendMail({
+      from: { name: 'BeautiQ Support', address: process.env.EMAIL_USER },
+      to: customer.emailAddress,
+      subject,
+      html: htmlContent
+    });
+    console.log(`✅ Account deletion rejection email sent to ${customer.emailAddress}`);
+  } catch (error) {
+    console.error(`❌ Failed to send account deletion rejection email:`, error);
+  }
+};
+
 // ENHANCED: Admin notification for new services with proper labeling
 export const sendServiceNotificationToAdmin = async (serviceData, providerData) => {
   try {
@@ -560,6 +683,31 @@ export const sendServiceNotificationToAdmin = async (serviceData, providerData) 
       </div>
     ` : '';
 
+    // Proposed changes table for update requests
+    const changesTable = serviceData.proposedChanges && serviceData.originalData ? `
+      <div style="margin: 20px 0;">
+        <h3>✏️ Proposed Changes</h3>
+        <table class="info-table" style="width:100%; border-collapse: collapse;">
+          <thead>
+            <tr style="background-color:#f0f0f0;">
+              <th style="padding:8px; text-align:left;">Field</th>
+              <th style="padding:8px; text-align:left;">Current Value</th>
+              <th style="padding:8px; text-align:left;">Updated Value</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${Object.keys(serviceData.proposedChanges).map(field => `
+            <tr>
+              <td style="padding:8px; vertical-align:top;"><strong>${field}</strong></td>
+              <td style="padding:8px; vertical-align:top;">${serviceData.originalData[field] || 'N/A'}</td>
+              <td style="padding:8px; vertical-align:top;">${serviceData.proposedChanges[field] || 'N/A'}</td>
+            </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    ` : '';
+
     // Action buttons
     const adminActions = `
       <div style="margin: 30px 0; text-align: center; padding: 20px; background-color: #f8f9fa; border-radius: 8px;">
@@ -588,6 +736,7 @@ export const sendServiceNotificationToAdmin = async (serviceData, providerData) 
       </div>
       
       ${serviceDetails}
+      ${changesTable}
       ${serviceDescription}
       ${providerDetails}
       ${adminActions}
@@ -882,5 +1031,9 @@ export default {
   sendRegistrationNotificationToAdmin,
   sendTestEmail,
   getEmailConfig,
-  sendServiceStatusNotificationToProvider
+  sendServiceStatusNotificationToProvider,
+  sendCustomerUpdateApprovalEmail,
+  sendCustomerUpdateRejectionEmail,
+  sendAccountDeletionApprovalEmail,
+  sendAccountDeletionRejectionEmail
 };
