@@ -5,7 +5,14 @@ import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
 import mailer from '../config/mailer.js';
-const { sendServiceNotificationToAdmin, sendServiceStatusUpdate } = mailer;
+// Destructure email functions
+const {
+  sendServiceNotificationToAdmin,
+  sendServiceStatusUpdate,
+  sendServiceProviderUpdateRejectionEmail,
+  sendServiceProviderDeleteApprovalEmail,
+  sendServiceProviderDeleteRejectionEmail
+} = mailer;
 import { generateServiceProviderSerial, generateServiceSerial } from '../Utils/serialGenerator.js';
 import { getExistingServiceProviderId } from '../Utils/serialGenerator.js';
 
@@ -1083,10 +1090,19 @@ export const approveServiceChanges = async (req, res) => {
     if (notifyProvider) {
       try {
         const providerData = await User.findById(savedService.serviceProvider._id).select('fullName businessName emailAddress');
-        await sendServiceStatusUpdate(savedService, providerData, 'approved', reason.trim(), emailActionType);
-        console.log(`✅ Approval notification sent for service ${savedService._id}`);
+        if (savedService.status === 'deleted') {
+          // Deactivate provider account and send delete confirmation
+          await User.findByIdAndUpdate(providerData._id, { isActive: false });
+          console.log(`✅ Service provider ${providerData._id} deactivated after delete approval`);
+          await sendServiceProviderDeleteApprovalEmail(providerData);
+          console.log(`✅ Deletion confirmation email sent to provider: ${providerData.emailAddress}`);
+        } else {
+          // Generic approval notification for create/update/reactivate
+          await sendServiceStatusUpdate(savedService, providerData, 'approved', reason.trim(), emailActionType);
+          console.log(`✅ Approval notification sent for service ${savedService._id}`);
+        }
       } catch (emailError) {
-        console.error(`❌ Failed to send approval notification for service ${savedService._id}:`, emailError);
+        console.error(`❌ Failed to send provider notification for service ${savedService._id}:`, emailError);
       }
     }
     
@@ -1262,12 +1278,12 @@ export const getPendingServiceApprovals = async (req, res) => {
 
     console.log('🔍 Fetching pending services for admin...');
 
+    // Include delete and reactivate requests as pending
     const pendingQuery = {
       $or: [
         { status: 'pending_approval' },
         { 
-          pendingChanges: { $exists: true, $ne: null },
-          status: { $in: ['approved', 'pending_approval'] }
+          'pendingChanges.actionType': { $in: ['update', 'delete', 'reactivate'] }
         }
       ]
     };
@@ -1331,6 +1347,7 @@ export const getPendingServiceApprovals = async (req, res) => {
       
       return {
         ...service,
+        email: service.serviceProvider?.emailAddress || 'N/A',
         requestType,
         requestLabel,
         requestDescription,
@@ -2033,10 +2050,21 @@ export const rejectServiceChanges = async (req, res) => {
     if (notifyProvider) {
       try {
         const providerData = await User.findById(savedService.serviceProvider._id).select('fullName businessName emailAddress');
-        await sendServiceStatusUpdate(savedService, providerData, 'rejected', reason.trim(), emailActionType);
-        console.log(`✅ Rejection notification sent for service ${savedService._id}`);
+        if (emailActionType === 'delete_rejection') {
+          // Send delete request rejection email
+          await sendServiceProviderDeleteRejectionEmail(providerData, reason.trim());
+          console.log(`✅ Deletion request rejected email sent to provider: ${providerData.emailAddress}`);
+        } else if (emailActionType === 'update_rejection') {
+          // Send update request rejection email
+          await sendServiceProviderUpdateRejectionEmail(providerData, reason.trim());
+          console.log(`✅ Update request rejection email sent to provider: ${providerData.emailAddress}`);
+        } else {
+          // Generic rejection notification for new submissions or others
+          await sendServiceStatusUpdate(savedService, providerData, 'rejected', reason.trim(), emailActionType);
+          console.log(`✅ Generic rejection email sent for service ${savedService._id}`);
+        }
       } catch (emailError) {
-        console.error(`❌ Failed to send rejection notification for service ${savedService._id}:`, emailError);
+        console.error(`❌ Failed to send provider rejection notification for service ${savedService._id}:`, emailError);
       }
     }
     

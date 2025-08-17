@@ -1,4 +1,4 @@
-// config/mailer.js - COMPLETELY FIXED EMAIL CONFIGURATION
+// config/mailer.js - UPDATED WITH SERVICE PROVIDER EMAIL FUNCTIONS
 import nodemailer from 'nodemailer';
 import dotenv from 'dotenv';
 
@@ -179,6 +179,410 @@ const createEmailTemplate = (title, content, actionType = 'info') => {
     </body>
     </html>
   `;
+};
+
+// NEW: Service Provider Update Approval Email
+export const sendServiceProviderUpdateApprovalEmail = async (serviceProvider, approvedFields) => {
+  try {
+    const transporter = createTransporter();
+    const subject = '✅ Profile Update Approved - BeautiQ Service Provider';
+    
+    const changesList = Object.entries(approvedFields)
+      .map(([key, value]) => `<li><strong>${key.replace(/([A-Z])/g, ' $1').trim()}:</strong> ${value}</li>`)
+      .join('');
+
+    const content = `
+      <p>Dear ${serviceProvider.fullName},</p>
+      <p>Great news! Your profile update request has been approved by our admin team.</p>
+      
+      <div class="success-message">
+        <h3>✅ Approved Changes</h3>
+        <ul style="list-style-type: none; padding: 0;">${changesList}</ul>
+      </div>
+      
+      <p>Your updated information is now live on the BeautiQ platform and visible to customers.</p>
+      
+      <div style="text-align: center; margin: 20px 0;">
+        <a href="${process.env.FRONTEND_URL || 'http://localhost:3000'}/service-provider-login" class="btn">Access Your Dashboard</a>
+      </div>
+      
+      <p>Thank you for keeping your profile information current!</p>
+    `;
+
+    const htmlContent = createEmailTemplate('Profile Update Approved', content, 'success');
+
+    await transporter.sendMail({
+      from: { name: 'BeautiQ Support', address: process.env.EMAIL_USER },
+      to: serviceProvider.emailAddress,
+      subject,
+      html: htmlContent
+    });
+    
+    console.log(`✅ Service provider update approval email sent to ${serviceProvider.emailAddress}`);
+    return true;
+  } catch (error) {
+    console.error(`❌ Failed to send service provider update approval email:`, error);
+    throw error;
+  }
+};
+
+// NEW: Service Provider Update Rejection Email
+export const sendServiceProviderUpdateRejectionEmail = async (serviceProvider, reason) => {
+  try {
+    const transporter = createTransporter();
+    const subject = '❌ Profile Update Request Rejected - BeautiQ Service Provider';
+
+    const content = `
+      <p>Dear ${serviceProvider.fullName},</p>
+      <p>We regret to inform you that your recent profile update request has been rejected by our admin team.</p>
+      
+      <div class="rejection-reason">
+        <h3>📋 Rejection Details</h3>
+        <p><strong>Business Name:</strong> ${serviceProvider.businessName}</p>
+        <p><strong>Provider ID:</strong> ${serviceProvider.serviceProviderId || 'Not assigned'}</p>
+        <p><strong>Rejection Reason:</strong></p>
+        <div style="background-color: white; padding: 12px; border-radius: 4px; margin: 10px 0; font-style: italic;">
+          "${reason}"
+        </div>
+      </div>
+      
+      <p><strong>What's Next:</strong></p>
+      <ul>
+        <li>Review the rejection reason carefully</li>
+        <li>Make necessary corrections to your profile information</li>
+        <li>Resubmit your update request through your dashboard</li>
+        <li>Contact support if you need clarification</li>
+      </ul>
+      
+      <div style="text-align: center; margin: 20px 0;">
+        <a href="${process.env.FRONTEND_URL || 'http://localhost:3000'}/service-provider-login" class="btn">Access Your Dashboard</a>
+      </div>
+    `;
+
+    const htmlContent = createEmailTemplate('Profile Update Rejected', content, 'error');
+
+    await transporter.sendMail({
+      from: { name: 'BeautiQ Support', address: process.env.EMAIL_USER },
+      to: serviceProvider.emailAddress,
+      subject,
+      html: htmlContent
+    });
+    
+    console.log(`✅ Service provider update rejection email sent to ${serviceProvider.emailAddress}`);
+    return true;
+  } catch (error) {
+    console.error(`❌ Failed to send service provider update rejection email:`, error);
+    throw error;
+  }
+};
+
+// NEW: Service Provider Account Deletion Approval Email
+export const sendServiceProviderDeleteApprovalEmail = async (serviceProvider) => {
+  try {
+    const transporter = createTransporter();
+    const subject = '✅ Account Deletion Approved - Thank You from BeautiQ';
+
+    const content = `
+      <p>Dear ${serviceProvider.fullName},</p>
+      
+      <div class="success-message">
+        <h3>🙏 Thank You for Being Part of BeautiQ</h3>
+        <p>Your account deletion request has been approved and processed successfully.</p>
+      </div>
+      
+      <div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0;">
+        <h4>📋 Account Details</h4>
+        <p><strong>Business Name:</strong> ${serviceProvider.businessName}</p>
+        <p><strong>Provider ID:</strong> ${serviceProvider.serviceProviderId || 'Not assigned'}</p>
+        <p><strong>Account Status:</strong> <span style="color: #f44336; font-weight: bold;">Deactivated</span></p>
+        <p><strong>Deletion Date:</strong> ${new Date().toLocaleDateString('en-US', {
+          year: 'numeric', month: 'long', day: 'numeric', 
+          hour: '2-digit', minute: '2-digit'
+        })}</p>
+      </div>
+      
+      <p>We want to express our heartfelt gratitude for the time you spent as a service provider on our platform. Your contributions helped make BeautiQ a better place for beauty enthusiasts.</p>
+      
+      <p><strong>Important Notes:</strong></p>
+      <ul>
+        <li>Your account has been permanently deactivated</li>
+        <li>You will no longer be able to log in with your previous credentials</li>
+        <li>All your service listings have been removed from the platform</li>
+        <li>If you wish to rejoin BeautiQ in the future, you will need to register as a new service provider</li>
+      </ul>
+      
+      <div style="background-color: #e3f2fd; padding: 15px; border-radius: 6px; margin: 20px 0;">
+        <h4>💙 We Hope to See You Again!</h4>
+        <p>If you ever decide to return to BeautiQ, we would be delighted to welcome you back. Simply register as a new service provider and go through our approval process again.</p>
+      </div>
+      
+      <p>Thank you once again for being part of our community. We wish you all the best in your future endeavors!</p>
+      
+      <p>Warm regards,<br>The BeautiQ Team</p>
+    `;
+
+    const htmlContent = createEmailTemplate('Thank You from BeautiQ', content, 'info');
+
+    await transporter.sendMail({
+      from: { name: 'BeautiQ Team', address: process.env.EMAIL_USER },
+      to: serviceProvider.emailAddress,
+      subject,
+      html: htmlContent
+    });
+    
+    console.log(`✅ Service provider deletion approval email sent to ${serviceProvider.emailAddress}`);
+    return true;
+  } catch (error) {
+    console.error(`❌ Failed to send service provider deletion approval email:`, error);
+    throw error;
+  }
+};
+
+// NEW: Service Provider Account Deletion Rejection Email
+export const sendServiceProviderDeleteRejectionEmail = async (serviceProvider, reason) => {
+  try {
+    const transporter = createTransporter();
+    const subject = '❌ Account Deletion Request Rejected - BeautiQ Service Provider';
+
+    const content = `
+      <p>Dear ${serviceProvider.fullName},</p>
+      <p>We have reviewed your account deletion request, and unfortunately, we cannot approve it at this time.</p>
+      
+      <div class="rejection-reason">
+        <h3>📋 Rejection Details</h3>
+        <p><strong>Business Name:</strong> ${serviceProvider.businessName}</p>
+        <p><strong>Provider ID:</strong> ${serviceProvider.serviceProviderId || 'Not assigned'}</p>
+        <p><strong>Request Date:</strong> ${new Date().toLocaleDateString('en-US', {
+          year: 'numeric', month: 'long', day: 'numeric'
+        })}</p>
+        <p><strong>Rejection Reason:</strong></p>
+        <div style="background-color: white; padding: 12px; border-radius: 4px; margin: 10px 0; font-style: italic;">
+          "${reason}"
+        </div>
+      </div>
+      
+      <p><strong>Your account remains active</strong> and you can continue using all BeautiQ services.</p>
+      
+      <p><strong>What's Next:</strong></p>
+      <ul>
+        <li>Review the rejection reason provided above</li>
+        <li>Contact our support team if you need clarification</li>
+        <li>Address any concerns mentioned in the rejection reason</li>
+        <li>You may resubmit your deletion request later if needed</li>
+      </ul>
+      
+      <div style="text-align: center; margin: 20px 0;">
+        <a href="${process.env.FRONTEND_URL || 'http://localhost:3000'}/service-provider-login" class="btn">Access Your Dashboard</a>
+        <a href="mailto:${process.env.ADMIN_EMAIL || 'support@beautiq.com'}" class="btn" style="background-color: #6c757d; margin-left: 10px;">Contact Support</a>
+      </div>
+    `;
+
+    const htmlContent = createEmailTemplate('Account Deletion Request Rejected', content, 'error');
+
+    await transporter.sendMail({
+      from: { name: 'BeautiQ Support', address: process.env.EMAIL_USER },
+      to: serviceProvider.emailAddress,
+      subject,
+      html: htmlContent
+    });
+    
+    console.log(`✅ Service provider deletion rejection email sent to ${serviceProvider.emailAddress}`);
+    return true;
+  } catch (error) {
+    console.error(`❌ Failed to send service provider deletion rejection email:`, error);
+    throw error;
+  }
+};
+
+// NEW: Admin Notification for Service Provider Requests
+export const sendServiceProviderRequestNotificationToAdmin = async (serviceProvider, requestType, description) => {
+  try {
+    console.log('📧 Sending service provider request notification to admin:', {
+      providerId: serviceProvider._id,
+      businessName: serviceProvider.businessName,
+      requestType,
+      description
+    });
+    
+    const transporter = createTransporter();
+    const adminEmail = process.env.ADMIN_EMAIL || 'admin@beautiq.com';
+    
+    let priority = 'normal';
+    let actionColor = 'info';
+    let urgencyLabel = '📋 Service Provider Request';
+    
+    if (requestType.includes('Delete') || requestType.includes('Deletion')) {
+      priority = 'high';
+      actionColor = 'error';
+      urgencyLabel = '🔥 HIGH PRIORITY - Account Deletion Request';
+    } else if (requestType.includes('Update')) {
+      priority = 'normal';
+      actionColor = 'warning';
+      urgencyLabel = '📝 Profile Update Request';
+    }
+
+    const subject = `${urgencyLabel}: ${serviceProvider.businessName} - Admin Action Required`;
+
+    // Service provider details table
+    const providerDetails = `
+      <table class="info-table">
+        <thead>
+          <tr>
+            <th colspan="2">👤 Service Provider Information</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Request Type</strong></td>
+            <td><span class="status-badge">${requestType}</span></td>
+          </tr>
+          <tr>
+            <td><strong>Business Name</strong></td>
+            <td>${serviceProvider.businessName}</td>
+          </tr>
+          <tr>
+            <td><strong>Provider Name</strong></td>
+            <td>${serviceProvider.fullName}</td>
+          </tr>
+          <tr>
+            <td><strong>Provider ID</strong></td>
+            <td>${serviceProvider.serviceProviderId || 'Not assigned'}</td>
+          </tr>
+          <tr>
+            <td><strong>Email</strong></td>
+            <td>${serviceProvider.emailAddress}</td>
+          </tr>
+          <tr>
+            <td><strong>Phone</strong></td>
+            <td>${serviceProvider.mobileNumber || 'Not provided'}</td>
+          </tr>
+          <tr>
+            <td><strong>Business Type</strong></td>
+            <td>${serviceProvider.businessType || 'Not specified'}</td>
+          </tr>
+          <tr>
+            <td><strong>City</strong></td>
+            <td>${serviceProvider.city || 'Not specified'}</td>
+          </tr>
+          <tr>
+            <td><strong>Request Date</strong></td>
+            <td>${new Date().toLocaleDateString('en-US', {
+              year: 'numeric', month: 'long', day: 'numeric', 
+              hour: '2-digit', minute: '2-digit'
+            })}</td>
+          </tr>
+        </tbody>
+      </table>
+    `;
+
+    // Pending changes table for update requests
+    const changesTable = serviceProvider.pendingUpdates?.fields && 
+      Object.keys(serviceProvider.pendingUpdates.fields).length > 0 ? `
+      <div style="margin: 20px 0;">
+        <h3>✏️ Requested Changes</h3>
+        <table class="info-table" style="width:100%; border-collapse: collapse;">
+          <thead>
+            <tr style="background-color:#f0f0f0;">
+              <th style="padding:8px; text-align:left;">Field</th>
+              <th style="padding:8px; text-align:left;">Current Value</th>
+              <th style="padding:8px; text-align:left;">Requested Value</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${Object.keys(serviceProvider.pendingUpdates.fields).map(field => `
+            <tr>
+              <td style="padding:8px; vertical-align:top;"><strong>${field}</strong></td>
+              <td style="padding:8px; vertical-align:top;">${serviceProvider[field] || 'N/A'}</td>
+              <td style="padding:8px; vertical-align:top;">${serviceProvider.pendingUpdates.fields[field] || 'N/A'}</td>
+            </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    ` : '';
+
+    // Deletion reason for delete requests
+    const deletionReason = serviceProvider.pendingUpdates?.deleteRequested && serviceProvider.pendingUpdates?.reason ? `
+      <div style="margin: 20px 0;">
+        <h3>🗑️ Deletion Reason</h3>
+        <div style="background-color: #ffebee; padding: 15px; border-radius: 8px; border-left: 4px solid #f44336;">
+          <em>"${serviceProvider.pendingUpdates.reason}"</em>
+        </div>
+      </div>
+    ` : '';
+
+    // Admin action buttons
+    const adminActions = `
+      <div style="margin: 30px 0; text-align: center; padding: 20px; background-color: #f8f9fa; border-radius: 8px;">
+        <h3>⚡ Admin Actions Required</h3>
+        <p>Please review this ${requestType.toLowerCase()} and take appropriate action:</p>
+        <div style="margin: 20px 0;">
+          <a href="${process.env.FRONTEND_URL || 'http://localhost:3000'}/admin/service-management" 
+             class="btn" 
+             style="background-color: #4CAF50; margin: 0 10px;">
+            ✅ Review & Approve
+          </a>
+          <a href="${process.env.FRONTEND_URL || 'http://localhost:3000'}/admin/service-management" 
+             class="btn" 
+             style="background-color: #f44336; margin: 0 10px;">
+            ❌ Review & Reject
+          </a>
+        </div>
+        <p><small>Provider ID: ${serviceProvider._id}</small></p>
+      </div>
+    `;
+
+    const emailContent = `
+      <div style="margin-bottom: 20px;">
+        <h2>🎯 ${urgencyLabel}</h2>
+        <p>${description}</p>
+      </div>
+      
+      ${providerDetails}
+      ${changesTable}
+      ${deletionReason}
+      ${adminActions}
+      
+      <div style="margin-top: 20px; padding: 15px; background-color: #e3f2fd; border-radius: 6px;">
+        <p><strong>⏰ Priority Level:</strong> ${priority.toUpperCase()}</p>
+        <p><strong>📧 Provider Contact:</strong> ${serviceProvider.emailAddress}</p>
+        <p><strong>📅 Request Time:</strong> ${new Date().toLocaleString()}</p>
+      </div>
+    `;
+
+    const htmlContent = createEmailTemplate(
+      `Admin Action Required: ${requestType}`,
+      emailContent,
+      actionColor
+    );
+
+    const mailOptions = {
+      from: {
+        name: 'BeautiQ Service Provider Notifications',
+        address: process.env.EMAIL_USER || 'admin@beautiq.com'
+      },
+      to: adminEmail,
+      subject: subject,
+      html: htmlContent,
+      priority: priority
+    };
+
+    const info = await transporter.sendMail(mailOptions);
+    console.log('✅ Service provider request notification sent to admin:', {
+      requestType,
+      providerId: serviceProvider._id,
+      businessName: serviceProvider.businessName,
+      providerEmail: serviceProvider.emailAddress,
+      adminEmail,
+      messageId: info.messageId,
+      priority
+    });
+
+    return true;
+  } catch (error) {
+    console.error('❌ Failed to send service provider request notification to admin:', error);
+    throw new Error(`Failed to send admin notification: ${error.message}`);
+  }
 };
 
 // ENHANCED: Service Status Update Email with Complete Details
@@ -1035,5 +1439,11 @@ export default {
   sendCustomerUpdateApprovalEmail,
   sendCustomerUpdateRejectionEmail,
   sendAccountDeletionApprovalEmail,
-  sendAccountDeletionRejectionEmail
+  sendAccountDeletionRejectionEmail,
+  // NEW: Service Provider specific email functions
+  sendServiceProviderUpdateApprovalEmail,
+  sendServiceProviderUpdateRejectionEmail,
+  sendServiceProviderDeleteApprovalEmail,
+  sendServiceProviderDeleteRejectionEmail,
+  sendServiceProviderRequestNotificationToAdmin
 };
