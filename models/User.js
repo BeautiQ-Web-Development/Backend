@@ -105,7 +105,10 @@ const userSchema = new Schema({
   },
   nicNumber: {
     type: String,
-    required: true
+    required: function() {
+      // NIC number is required for customers and service providers, not for admins
+      return this.role === 'serviceProvider' || this.role === 'customer';
+    }
   },
   customerId: {
     type: String,
