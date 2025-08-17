@@ -1,4 +1,4 @@
-//controllers/authController.js - COMPLETELY FIXED VERSION WITH PROPER ACCOUNT DELETION
+//controllers/authController.js - FIXED VERSION WITH PROPER SERVICE PROVIDER REQUEST HANDLING
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import User from '../models/User.js';
@@ -10,7 +10,12 @@ import {
   sendCustomerUpdateApprovalEmail, 
   sendCustomerUpdateRejectionEmail, 
   sendAccountDeletionApprovalEmail, 
-  sendAccountDeletionRejectionEmail 
+  sendAccountDeletionRejectionEmail,
+  sendServiceProviderUpdateApprovalEmail,
+  sendServiceProviderUpdateRejectionEmail,
+  sendServiceProviderDeleteApprovalEmail,
+  sendServiceProviderDeleteRejectionEmail,
+  sendServiceProviderRequestNotificationToAdmin
 } from '../config/mailer.js';
 import crypto from 'crypto';
 
@@ -49,9 +54,9 @@ const validateRegistrationData = (data, role) => {
 
 export const register = async (req, res) => {
   try {
-    console.log('Registration request received');
-    console.log('Request body keys:', Object.keys(req.body));
-    console.log('Files:', req.files ? Object.keys(req.files) : 'No files');
+    console.log('🔄 Registration request received');
+    console.log('📋 Request body keys:', Object.keys(req.body));
+    console.log('📎 Files:', req.files ? Object.keys(req.files) : 'No files');
     
     const {
       fullName,
@@ -85,8 +90,8 @@ export const register = async (req, res) => {
       role = 'serviceProvider';
     }
 
-    console.log('Role:', role);
-    console.log('Email:', emailAddress);
+    console.log('👤 Role:', role);
+    console.log('📧 Email:', emailAddress);
 
     // For admin registration, check if admin already exists
     if (role === 'admin') {
@@ -147,11 +152,11 @@ export const register = async (req, res) => {
         try {
           parsedServices = JSON.parse(services);
         } catch (jsonErr) {
-          console.warn('services JSON.parse failed, falling back to eval:', jsonErr);
+          console.warn('🚨 services JSON.parse failed, falling back to eval:', jsonErr);
           try {
             parsedServices = Function('"use strict";return (' + services + ')')();
           } catch (evalErr) {
-            console.error('Failed to eval services:', evalErr);
+            console.error('❌ Failed to eval services:', evalErr);
             return res.status(400).json({
               success: false,
               message: 'Invalid services format',
@@ -209,14 +214,14 @@ export const register = async (req, res) => {
         }
       }
 
-      console.log('Service provider data prepared for saving');
+      console.log('🏢 Service provider data prepared for saving');
     }
 
     // Create and save user
     const newUser = new User(userData);
     const savedUser = await newUser.save();
 
-    console.log('User saved successfully:', {
+    console.log('✅ User saved successfully:', {
       id: savedUser._id,
       role: savedUser.role,
       approved: savedUser.approved,
@@ -245,8 +250,8 @@ export const register = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Registration error:', error);
-    console.error('Error stack:', error.stack);
+    console.error('❌ Registration error:', error);
+    console.error('❌ Error stack:', error.stack);
     res.status(500).json({
       success: false,
       message: 'Registration failed due to server error',
@@ -259,7 +264,7 @@ export const login = async (req, res) => {
   try {
     const { emailAddress, password, role } = req.body;
     
-    console.log('Login attempt:', { emailAddress, role });
+    console.log('🔐 Login attempt:', { emailAddress, role });
 
     if (!emailAddress || !password || !role) {
       return res.status(400).json({
@@ -280,6 +285,14 @@ export const login = async (req, res) => {
 
     // CRITICAL FIX: Check if account is deactivated/deleted
     if (user.isActive === false) {
+      console.log('🚫 Blocked login attempt for deactivated account:', {
+        userId: user._id,
+        email: user.emailAddress,
+        role: user.role,
+        isActive: user.isActive,
+        deletedAt: user.deletedAt
+      });
+      
       return res.status(403).json({
         success: false,
         message: 'Your account has been deactivated. Please contact support for assistance.',
@@ -324,7 +337,7 @@ export const login = async (req, res) => {
       { expiresIn: '24h' }
     );
 
-    console.log('Login successful for user:', {
+    console.log('✅ Login successful for user:', {
       id: user._id,
       role: user.role,
       approved: user.approved || user.approvalStatus === 'approved',
@@ -347,7 +360,7 @@ export const login = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Login error:', error);
+    console.error('❌ Login error:', error);
     res.status(500).json({
       success: false,
       message: 'Login failed',
@@ -399,7 +412,7 @@ export const verifyToken = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Token verification error:', error);
+    console.error('❌ Token verification error:', error);
     res.status(401).json({
       success: false,
       message: 'Invalid token'
@@ -433,7 +446,7 @@ export const getProfile = async (req, res) => {
       user
     });
   } catch (error) {
-    console.error('Error getting profile:', error);
+    console.error('❌ Error getting profile:', error);
     res.status(500).json({
       success: false,
       message: 'Server error'
@@ -441,13 +454,251 @@ export const getProfile = async (req, res) => {
   }
 };
 
-// Update user profile (pending admin approval)
+// FIXED: Service Provider Profile Update Request with Enhanced Logging and Admin Notification
+export const requestServiceProviderUpdate = async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const updateData = { ...req.body };
+    
+    console.log('🔄 Service Provider update request received:', {
+      userId,
+      updateFields: Object.keys(updateData),
+      updateData: JSON.stringify(updateData, null, 2)
+    });
+
+    // Remove sensitive fields that shouldn't be updated this way
+    delete updateData.password;
+    delete updateData._id;
+    delete updateData.role;
+    delete updateData.approved;
+    delete updateData.approvalStatus;
+    delete updateData.isActive;
+    delete updateData.serviceProviderId;
+    
+    const serviceProvider = await User.findById(userId);
+    
+    if (!serviceProvider) {
+      console.log('❌ Service provider not found:', userId);
+      return res.status(404).json({
+        success: false,
+        message: 'Service provider not found'
+      });
+    }
+
+    if (serviceProvider.role !== 'serviceProvider') {
+      console.log('❌ User is not a service provider:', {
+        userId,
+        role: serviceProvider.role
+      });
+      return res.status(403).json({
+        success: false,
+        message: 'This endpoint is only for service providers'
+      });
+    }
+
+    // Check if account is deactivated
+    if (serviceProvider.isActive === false) {
+      console.log('❌ Attempt to update deactivated account:', {
+        userId,
+        isActive: serviceProvider.isActive,
+        deletedAt: serviceProvider.deletedAt
+      });
+      return res.status(403).json({
+        success: false,
+        message: 'Cannot update deactivated account',
+        accountDeactivated: true
+      });
+    }
+    
+    // CRITICAL FIX: Store update request properly in user document
+    serviceProvider.pendingUpdates = {
+      fields: updateData,
+      requestedAt: new Date(),
+      status: 'pending',
+      deleteRequested: false,
+      requestType: 'update'
+    };
+    
+    // Save with proper validation
+    const savedProvider = await serviceProvider.save();
+    
+    console.log('✅ Service Provider update request saved successfully:', {
+      userId: savedProvider._id,
+      businessName: savedProvider.businessName,
+      hasPendingUpdates: !!savedProvider.pendingUpdates,
+      pendingStatus: savedProvider.pendingUpdates?.status,
+      requestType: savedProvider.pendingUpdates?.requestType,
+      fieldsToUpdate: Object.keys(savedProvider.pendingUpdates?.fields || {})
+    });
+
+    // CRITICAL FIX: Send notification to admin with better error handling
+    try {
+      console.log('📧 Attempting to send admin notification email...');
+      await sendServiceProviderRequestNotificationToAdmin(
+        savedProvider, 
+        'Profile Update Request',
+        `Service provider ${savedProvider.businessName} has requested to update their profile information.`
+      );
+      console.log('✅ Admin notification email sent successfully for service provider update request');
+    } catch (emailError) {
+      console.error('❌ Failed to send admin notification email:', {
+        error: emailError.message,
+        stack: emailError.stack,
+        providerId: savedProvider._id,
+        businessName: savedProvider.businessName
+      });
+      // Don't fail the request if email fails, but log it
+    }
+    
+    res.status(200).json({
+      success: true,
+      message: 'Profile update request submitted successfully. Admin has been notified and will review your request.',
+      pendingUpdates: {
+        status: savedProvider.pendingUpdates.status,
+        requestType: savedProvider.pendingUpdates.requestType,
+        requestedAt: savedProvider.pendingUpdates.requestedAt,
+        fieldsCount: Object.keys(savedProvider.pendingUpdates.fields).length
+      }
+    });
+  } catch (error) {
+    console.error('❌ Error requesting service provider update:', {
+      error: error.message,
+      stack: error.stack,
+      userId,
+      updateData: Object.keys(updateData || {})
+    });
+    res.status(500).json({
+      success: false,
+      message: 'Server error while processing update request'
+    });
+  }
+};
+
+// FIXED: Service Provider Account Deletion Request with Enhanced Logging and Admin Notification
+export const requestServiceProviderDeletion = async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const { reason } = req.body;
+    
+    console.log('🗑️ Service Provider deletion request received:', {
+      userId,
+      reason: reason || 'No reason provided',
+      reasonLength: reason ? reason.length : 0
+    });
+
+    if (!reason || reason.trim().length < 10) {
+      return res.status(400).json({
+        success: false,
+        message: 'Deletion reason is required and must be at least 10 characters long'
+      });
+    }
+    
+    const serviceProvider = await User.findById(userId);
+    
+    if (!serviceProvider) {
+      console.log('❌ Service provider not found for deletion:', userId);
+      return res.status(404).json({
+        success: false,
+        message: 'Service provider not found'
+      });
+    }
+
+    if (serviceProvider.role !== 'serviceProvider') {
+      console.log('❌ User is not a service provider for deletion:', {
+        userId,
+        role: serviceProvider.role
+      });
+      return res.status(403).json({
+        success: false,
+        message: 'This endpoint is only for service providers'
+      });
+    }
+
+    // Check if account is already deactivated
+    if (serviceProvider.isActive === false) {
+      console.log('❌ Account already deactivated:', {
+        userId,
+        isActive: serviceProvider.isActive,
+        deletedAt: serviceProvider.deletedAt
+      });
+      return res.status(400).json({
+        success: false,
+        message: 'Account is already deactivated'
+      });
+    }
+    
+    // CRITICAL FIX: Store deletion request using pendingUpdates schema
+    serviceProvider.pendingUpdates = {
+      fields: {},
+      requestedAt: new Date(),
+      status: 'pending',
+      deleteRequested: true,
+      requestType: 'delete',
+      reason: reason.trim()
+    };
+    
+    // Save with proper validation
+    const savedProvider = await serviceProvider.save();
+    
+    console.log('✅ Service Provider deletion request saved successfully:', {
+      userId: savedProvider._id,
+      businessName: savedProvider.businessName,
+      deleteRequested: savedProvider.pendingUpdates?.deleteRequested,
+      reason: savedProvider.pendingUpdates?.reason,
+      requestedAt: savedProvider.pendingUpdates?.requestedAt,
+      status: savedProvider.pendingUpdates?.status
+    });
+
+    // CRITICAL FIX: Send notification to admin with better error handling
+    try {
+      console.log('📧 Attempting to send admin notification email for deletion request...');
+      await sendServiceProviderRequestNotificationToAdmin(
+        savedProvider, 
+        'Account Deletion Request',
+        `Service provider ${savedProvider.businessName} has requested to delete their account. Reason: ${reason.substring(0, 100)}${reason.length > 100 ? '...' : ''}`
+      );
+      console.log('✅ Admin notification email sent successfully for service provider deletion request');
+    } catch (emailError) {
+      console.error('❌ Failed to send admin notification email for deletion:', {
+        error: emailError.message,
+        stack: emailError.stack,
+        providerId: savedProvider._id,
+        businessName: savedProvider.businessName
+      });
+      // Don't fail the request if email fails, but log it
+    }
+    
+    res.status(200).json({
+      success: true,
+      message: 'Account deletion request submitted successfully. Admin has been notified and will review your request.',
+      pendingDeletion: {
+        status: savedProvider.pendingUpdates.status,
+        requestType: savedProvider.pendingUpdates.requestType,
+        requestedAt: savedProvider.pendingUpdates.requestedAt,
+        reason: savedProvider.pendingUpdates.reason
+      }
+    });
+  } catch (error) {
+    console.error('❌ Error requesting service provider deletion:', {
+      error: error.message,
+      stack: error.stack,
+      userId,
+      reason: reason || 'No reason provided'
+    });
+    res.status(500).json({
+      success: false,
+      message: 'Server error while processing deletion request'
+    });
+  }
+};
+
+// Update user profile (pending admin approval) - For customers
 export const updateProfile = async (req, res) => {
   try {
     const userId = req.user.userId;
     const updateData = { ...req.body };
     
-    console.log('🔍 Profile update request:', {
+    console.log('🔍 Customer profile update request:', {
       userId,
       updateFields: Object.keys(updateData),
       updateData
@@ -492,7 +743,7 @@ export const updateProfile = async (req, res) => {
     
     // Verify the save worked
     const savedUser = await User.findById(userId);
-    console.log('✅ Pending update saved:', {
+    console.log('✅ Customer pending update saved:', {
       userId: savedUser._id,
       hasPendingUpdates: !!savedUser.pendingUpdates,
       pendingStatus: savedUser.pendingUpdates?.status,
@@ -504,7 +755,7 @@ export const updateProfile = async (req, res) => {
       message: 'Profile update request submitted successfully. Pending admin approval.'
     });
   } catch (error) {
-    console.error('Error updating profile:', error);
+    console.error('❌ Error updating customer profile:', error);
     res.status(500).json({
       success: false,
       message: 'Server error'
@@ -512,76 +763,13 @@ export const updateProfile = async (req, res) => {
   }
 };
 
-// // Request account deletion/deactivation
-// export const requestAccountDeletion = async (req, res) => {
-//   try {
-//     const userId = req.user.userId;
-//     const { reason } = req.body;
-    
-//     console.log('🗑️ Account deletion request:', {
-//       userId,
-//       reason: reason || 'No reason provided'
-//     });
-    
-//     const user = await User.findById(userId);
-    
-//     if (!user) {
-//       return res.status(404).json({
-//         success: false,
-//         message: 'User not found'
-//       });
-//     }
-
-//     // Check if account is already deactivated
-//     if (user.isActive === false) {
-//       return res.status(400).json({
-//         success: false,
-//         message: 'Account is already deactivated'
-//       });
-//     }
-    
-//     // Store deletion request using pendingUpdates schema
-//     user.pendingUpdates = {
-//       fields: {},
-//       requestedAt: new Date(),
-//       status: 'pending',
-//       deleteRequested: true,
-//       requestType: 'delete',
-//       reason: reason || 'No reason provided'
-//     };
-    
-//     await user.save();
-    
-//     // Verify the deletion request was saved
-//     const savedUser = await User.findById(userId);
-//     console.log('✅ Deletion request saved:', {
-//       userId: savedUser._id,
-//       hasPendingUpdates: !!savedUser.pendingUpdates,
-//       deleteRequested: savedUser.pendingUpdates?.deleteRequested,
-//       requestType: savedUser.pendingUpdates?.requestType,
-//       reason: savedUser.pendingUpdates?.reason
-//     });
-    
-//     res.status(200).json({
-//       success: true,
-//       message: 'Account deletion request submitted successfully. Pending admin review.'
-//     });
-//   } catch (error) {
-//     console.error('Error requesting account deletion:', error);
-//     res.status(500).json({
-//       success: false,
-//       message: 'Server error'
-//     });
-//   }
-// };
-
-// Request account deletion/deactivation
+// Request account deletion/deactivation - For customers
 export const requestAccountDeletion = async (req, res) => {
   try {
     const userId = req.user.userId;
     const { reason } = req.body;
     
-    console.log('🗑️ Account deletion request:', {
+    console.log('🗑️ Customer account deletion request:', {
       userId,
       reason: reason || 'No reason provided'
     });
@@ -617,7 +805,7 @@ export const requestAccountDeletion = async (req, res) => {
     
     // Verify the deletion request was saved
     const savedUser = await User.findById(userId);
-    console.log('✅ Deletion request saved:', {
+    console.log('✅ Customer deletion request saved:', {
       userId: savedUser._id,
       hasPendingUpdates: !!savedUser.pendingUpdates,
       deleteRequested: savedUser.pendingUpdates?.deleteRequested,
@@ -630,7 +818,7 @@ export const requestAccountDeletion = async (req, res) => {
       message: 'Account deletion request submitted successfully. Pending admin review.'
     });
   } catch (error) {
-    console.error('Error requesting account deletion:', error);
+    console.error('❌ Error requesting customer account deletion:', error);
     res.status(500).json({
       success: false,
       message: 'Server error'
@@ -638,7 +826,336 @@ export const requestAccountDeletion = async (req, res) => {
   }
 };
 
+// FIXED: ADMIN - Approve Service Provider Update Request with proper email notifications
+export const approveServiceProviderUpdate = async (req, res) => {
+  try {
+    // Ensure admin privileges
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Unauthorized. Admin privileges required.'
+      });
+    }
+    
+    const { providerId } = req.params;
+    
+    console.log('🟢 Admin approving service provider update/deletion:', { 
+      providerId,
+      adminId: req.user.userId 
+    });
+    
+    const serviceProvider = await User.findById(providerId);
+    if (!serviceProvider) {
+      console.log('❌ Service provider not found for approval:', providerId);
+      return res.status(404).json({
+        success: false,
+        message: 'Service provider not found'
+      });
+    }
+    
+    if (serviceProvider.role !== 'serviceProvider') {
+      console.log('❌ User is not a service provider:', {
+        providerId,
+        role: serviceProvider.role
+      });
+      return res.status(400).json({
+        success: false,
+        message: 'User is not a service provider'
+      });
+    }
+    
+    if (!serviceProvider.pendingUpdates || serviceProvider.pendingUpdates.status !== 'pending') {
+      console.log('❌ No pending updates found:', {
+        providerId,
+        hasPendingUpdates: !!serviceProvider.pendingUpdates,
+        status: serviceProvider.pendingUpdates?.status
+      });
+      return res.status(400).json({
+        success: false,
+        message: 'No pending updates found for this service provider'
+      });
+    }
+    
+    // Determine if this is a deletion request
+    const isDeletion = !!serviceProvider.pendingUpdates.deleteRequested;
+    
+    console.log('📋 Processing request:', {
+      providerId,
+      businessName: serviceProvider.businessName,
+      isDeletion,
+      requestType: serviceProvider.pendingUpdates.requestType,
+      reason: serviceProvider.pendingUpdates.reason
+    });
 
+    if (serviceProvider.pendingUpdates.deleteRequested) {
+      // CRITICAL: For account deletion, mark as INACTIVE and prevent login
+      serviceProvider.isActive = false; // This prevents login
+      serviceProvider.deletedAt = new Date();
+      serviceProvider.deletionReason = serviceProvider.pendingUpdates.reason || 'Account deletion requested by service provider';
+      
+      // Add to status history
+      if (!serviceProvider.statusHistory) serviceProvider.statusHistory = [];
+      serviceProvider.statusHistory.push({
+        status: 'deleted',
+        timestamp: new Date(),
+        changedBy: req.user.userId,
+        reason: 'Account deletion request approved by admin'
+      });
+      
+      console.log('🗑️ Service Provider account marked as INACTIVE:', {
+        providerId: serviceProvider._id,
+        businessName: serviceProvider.businessName,
+        isActive: serviceProvider.isActive,
+        deletedAt: serviceProvider.deletedAt,
+        deletionReason: serviceProvider.deletionReason
+      });
+      
+      // Send deletion approval email with thank you note
+      try {
+        console.log('📧 Sending deletion approval email to service provider...');
+        await sendServiceProviderDeleteApprovalEmail(serviceProvider);
+        console.log('✅ Service provider deletion approval email sent successfully');
+      } catch (emailError) {
+        console.error('❌ Failed to send deletion approval email:', {
+          error: emailError.message,
+          providerId: serviceProvider._id,
+          businessName: serviceProvider.businessName
+        });
+      }
+    } else {
+      // Handle update request - Apply the pending updates
+      const updates = serviceProvider.pendingUpdates.fields;
+      const previousValues = {};
+      
+      console.log('📝 Applying profile updates:', {
+        providerId: serviceProvider._id,
+        businessName: serviceProvider.businessName,
+        fieldsToUpdate: Object.keys(updates)
+      });
+      
+      Object.keys(updates).forEach(key => {
+        if (updates[key] !== undefined) {
+          // Store previous value for history
+          previousValues[key] = serviceProvider[key];
+          // Update the field
+          serviceProvider[key] = updates[key];
+          console.log(`📝 Updated ${key}: ${previousValues[key]} → ${updates[key]}`);
+        }
+      });
+      
+      console.log('✅ Applied service provider updates:', {
+        providerId: serviceProvider._id,
+        businessName: serviceProvider.businessName,
+        updatedFields: Object.keys(updates),
+        previousValues
+      });
+      
+      // Send update approval email
+      try {
+        console.log('📧 Sending update approval email to service provider...');
+        await sendServiceProviderUpdateApprovalEmail(serviceProvider, updates);
+        console.log('✅ Service provider update approval email sent successfully');
+      } catch (emailError) {
+        console.error('❌ Failed to send update approval email:', {
+          error: emailError.message,
+          providerId: serviceProvider._id,
+          businessName: serviceProvider.businessName
+        });
+      }
+    }
+    
+    // Mark the pending updates as approved
+    serviceProvider.pendingUpdates.status = 'approved';
+    serviceProvider.pendingUpdates.approvedAt = new Date();
+    serviceProvider.pendingUpdates.approvedBy = req.user.userId;
+    
+    // Save first, then clear pending updates
+    await serviceProvider.save();
+    
+    console.log('💾 Service provider saved with approval status');
+    
+    // Clear pending updates after successful approval
+    serviceProvider.pendingUpdates = null;
+    await serviceProvider.save();
+    
+    console.log(`✅ Service provider ${isDeletion ? 'deletion' : 'update'} approved and completed successfully`);
+    
+    res.status(200).json({
+      success: true,
+      message: isDeletion
+        ? 'Account deletion request approved successfully. Service provider account has been deactivated and they have been notified.'
+        : 'Profile update request approved successfully. Service provider has been notified via email.',
+      serviceProvider: {
+        _id: serviceProvider._id,
+        businessName: serviceProvider.businessName,
+        fullName: serviceProvider.fullName,
+        isActive: serviceProvider.isActive,
+        deletedAt: serviceProvider.deletedAt,
+        deletionReason: serviceProvider.deletionReason
+      }
+    });
+    
+  } catch (error) {
+    console.error('❌ Error approving service provider update:', {
+      error: error.message,
+      stack: error.stack,
+      providerId: req.params.providerId
+    });
+    res.status(500).json({
+      success: false,
+      message: 'Server error while processing approval'
+    });
+  }
+};
+
+// FIXED: ADMIN - Reject Service Provider Update Request with proper email notifications
+export const rejectServiceProviderUpdate = async (req, res) => {
+  try {
+    // Ensure admin privileges
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Unauthorized. Admin privileges required.'
+      });
+    }
+    
+    const { providerId } = req.params;
+    const { rejectionReason } = req.body;
+    
+    console.log('🔴 Admin rejecting service provider update/deletion:', { 
+      providerId, 
+      rejectionReason: rejectionReason || 'No reason provided',
+      adminId: req.user.userId
+    });
+    
+    // Validate rejection reason
+    if (!rejectionReason || rejectionReason.trim() === '') {
+      return res.status(400).json({
+        success: false,
+        message: 'Rejection reason is required and cannot be empty'
+      });
+    }
+    
+    const serviceProvider = await User.findById(providerId);
+    if (!serviceProvider) {
+      console.log('❌ Service provider not found for rejection:', providerId);
+      return res.status(404).json({
+        success: false,
+        message: 'Service provider not found'
+      });
+    }
+    
+    if (serviceProvider.role !== 'serviceProvider') {
+      console.log('❌ User is not a service provider:', {
+        providerId,
+        role: serviceProvider.role
+      });
+      return res.status(400).json({
+        success: false,
+        message: 'User is not a service provider'
+      });
+    }
+    
+    if (!serviceProvider.pendingUpdates || serviceProvider.pendingUpdates.status !== 'pending') {
+      console.log('❌ No pending updates found for rejection:', {
+        providerId,
+        hasPendingUpdates: !!serviceProvider.pendingUpdates,
+        status: serviceProvider.pendingUpdates?.status
+      });
+      return res.status(400).json({
+        success: false,
+        message: 'No pending updates found for this service provider'
+      });
+    }
+    
+    // Determine if this is a deletion request
+    const isDeletion = !!serviceProvider.pendingUpdates.deleteRequested;
+    
+    console.log('📋 Processing rejection:', {
+      providerId,
+      businessName: serviceProvider.businessName,
+      isDeletion,
+      requestType: serviceProvider.pendingUpdates.requestType,
+      rejectionReason: rejectionReason.trim()
+    });
+    
+    // CRITICAL: DO NOT APPLY ANY CHANGES WHEN REJECTING
+    // Just mark the pending updates as rejected, don't modify the original data
+    
+    serviceProvider.pendingUpdates.status = 'rejected';
+    serviceProvider.pendingUpdates.rejectedAt = new Date();
+    serviceProvider.pendingUpdates.rejectedBy = req.user.userId;
+    serviceProvider.pendingUpdates.rejectionReason = rejectionReason.trim();
+    
+    // Add to status history
+    if (!serviceProvider.statusHistory) serviceProvider.statusHistory = [];
+    serviceProvider.statusHistory.push({
+      status: serviceProvider.pendingUpdates.deleteRequested ? 'deletion_rejected' : 'update_rejected',
+      timestamp: new Date(),
+      changedBy: req.user.userId,
+      reason: rejectionReason.trim()
+    });
+    
+    console.log(`🔴 Service provider ${isDeletion ? 'deletion' : 'update'} request rejected - NO CHANGES APPLIED TO ORIGINAL DATA`);
+    
+    // Send notification to service provider about rejection
+    try {
+      console.log('📧 Sending rejection email to service provider...');
+      if (serviceProvider.pendingUpdates.deleteRequested) {
+        await sendServiceProviderDeleteRejectionEmail(serviceProvider, rejectionReason.trim());
+        console.log('✅ Service provider deletion rejection email sent successfully');
+      } else {
+        await sendServiceProviderUpdateRejectionEmail(serviceProvider, rejectionReason.trim());
+        console.log('✅ Service provider update rejection email sent successfully');
+      }
+    } catch (emailError) {
+      console.error('❌ Failed to send rejection email:', {
+        error: emailError.message,
+        providerId: serviceProvider._id,
+        businessName: serviceProvider.businessName,
+        isDeletion
+      });
+      // Don't fail the request if email fails, but log it
+    }
+    
+    // Save the rejection status first
+    await serviceProvider.save();
+    
+    console.log('💾 Service provider saved with rejection status');
+    
+    // Clear pending updates after rejection
+    serviceProvider.pendingUpdates = null;
+    await serviceProvider.save();
+    
+    console.log(`✅ Service provider ${isDeletion ? 'deletion' : 'update'} rejected and completed successfully`);
+    
+    res.status(200).json({
+      success: true,
+      message: isDeletion
+        ? 'Account deletion request rejected successfully. Service provider has been notified via email with the reason for rejection.'
+        : 'Profile update request rejected successfully. Service provider has been notified via email with the reason for rejection.',
+      rejectionDetails: {
+        providerId: serviceProvider._id,
+        businessName: serviceProvider.businessName,
+        requestType: isDeletion ? 'delete' : 'update',
+        rejectionReason: rejectionReason.trim(),
+        rejectedAt: new Date()
+      }
+    });
+    
+  } catch (error) {
+    console.error('❌ Error rejecting service provider update:', {
+      error: error.message,
+      stack: error.stack,
+      providerId: req.params.providerId,
+      rejectionReason
+    });
+    res.status(500).json({
+      success: false,
+      message: 'Server error while processing rejection'
+    });
+  }
+};
 
 // CRITICAL FIX: ADMIN: Approve customer update request with proper account deletion
 export const approveCustomerUpdate = async (req, res) => {
@@ -653,8 +1170,14 @@ export const approveCustomerUpdate = async (req, res) => {
     
     const { customerId } = req.params;
     
+    console.log('🟢 Admin approving customer update/deletion:', {
+      customerId,
+      adminId: req.user.userId
+    });
+    
     const customer = await User.findById(customerId);
     if (!customer) {
+      console.log('❌ Customer not found for approval:', customerId);
       return res.status(404).json({
         success: false,
         message: 'Customer not found'
@@ -662,6 +1185,11 @@ export const approveCustomerUpdate = async (req, res) => {
     }
     
     if (!customer.pendingUpdates || customer.pendingUpdates.status !== 'pending') {
+      console.log('❌ No pending updates found for customer:', {
+        customerId,
+        hasPendingUpdates: !!customer.pendingUpdates,
+        status: customer.pendingUpdates?.status
+      });
       return res.status(400).json({
         success: false,
         message: 'No pending updates found for this customer'
@@ -670,6 +1198,14 @@ export const approveCustomerUpdate = async (req, res) => {
     
     // Determine if this is a deletion request
     const isDeletion = !!customer.pendingUpdates.deleteRequested;
+    
+    console.log('📋 Processing customer request:', {
+      customerId,
+      customerName: customer.fullName,
+      isDeletion,
+      requestType: customer.pendingUpdates.requestType,
+      reason: customer.pendingUpdates.reason
+    });
     
     if (customer.pendingUpdates.deleteRequested) {
       // CRITICAL FIX: For account deletion, mark as INACTIVE and prevent login
@@ -686,8 +1222,9 @@ export const approveCustomerUpdate = async (req, res) => {
         reason: 'Account deletion request approved by admin'
       });
       
-      console.log('🗑️ Account marked as INACTIVE:', {
+      console.log('🗑️ Customer account marked as INACTIVE:', {
         customerId: customer._id,
+        customerName: customer.fullName,
         isActive: customer.isActive,
         deletedAt: customer.deletedAt,
         deletionReason: customer.deletionReason
@@ -695,15 +1232,26 @@ export const approveCustomerUpdate = async (req, res) => {
       
       // Send deletion approval email
       try {
+        console.log('📧 Sending deletion approval email to customer...');
         await sendAccountDeletionApprovalEmail(customer);
-        console.log('✅ Account deletion approval email sent');
+        console.log('✅ Customer account deletion approval email sent successfully');
       } catch (emailError) {
-        console.error('❌ Failed to send deletion approval email:', emailError);
+        console.error('❌ Failed to send deletion approval email:', {
+          error: emailError.message,
+          customerId: customer._id,
+          customerName: customer.fullName
+        });
       }
     } else {
       // Handle update request - Apply the pending updates
       const updates = customer.pendingUpdates.fields;
       const previousValues = {};
+      
+      console.log('📝 Applying customer profile updates:', {
+        customerId: customer._id,
+        customerName: customer.fullName,
+        fieldsToUpdate: Object.keys(updates)
+      });
       
       Object.keys(updates).forEach(key => {
         if (updates[key] !== undefined) {
@@ -711,15 +1259,28 @@ export const approveCustomerUpdate = async (req, res) => {
           previousValues[key] = customer[key];
           // Update the field
           customer[key] = updates[key];
+          console.log(`📝 Updated ${key}: ${previousValues[key]} → ${updates[key]}`);
         }
+      });
+      
+      console.log('✅ Applied customer updates:', {
+        customerId: customer._id,
+        customerName: customer.fullName,
+        updatedFields: Object.keys(updates),
+        previousValues
       });
       
       // Send update approval email
       try {
+        console.log('📧 Sending update approval email to customer...');
         await sendCustomerUpdateApprovalEmail(customer, updates);
-        console.log('✅ Profile update approval email sent');
+        console.log('✅ Customer profile update approval email sent successfully');
       } catch (emailError) {
-        console.error('❌ Failed to send update approval email:', emailError);
+        console.error('❌ Failed to send update approval email:', {
+          error: emailError.message,
+          customerId: customer._id,
+          customerName: customer.fullName
+        });
       }
     }
     
@@ -731,25 +1292,38 @@ export const approveCustomerUpdate = async (req, res) => {
     // Save first, then clear pending updates
     await customer.save();
     
+    console.log('💾 Customer saved with approval status');
+    
     // Clear pending updates after successful approval
     customer.pendingUpdates = null;
     await customer.save();
     
-    console.log(`✅ Customer ${isDeletion ? 'deletion' : 'update'} approved successfully`);
+    console.log(`✅ Customer ${isDeletion ? 'deletion' : 'update'} approved and completed successfully`);
     
     res.status(200).json({
       success: true,
       message: isDeletion
-        ? 'Account deletion request approved successfully. Customer account has been deactivated.'
-        : 'Profile update request approved successfully',
-      customer: customer
+        ? 'Account deletion request approved successfully. Customer account has been deactivated and they have been notified.'
+        : 'Profile update request approved successfully. Customer has been notified via email.',
+      customer: {
+        _id: customer._id,
+        fullName: customer.fullName,
+        emailAddress: customer.emailAddress,
+        isActive: customer.isActive,
+        deletedAt: customer.deletedAt,
+        deletionReason: customer.deletionReason
+      }
     });
     
   } catch (error) {
-    console.error('Error approving customer update:', error);
+    console.error('❌ Error approving customer update:', {
+      error: error.message,
+      stack: error.stack,
+      customerId: req.params.customerId
+    });
     res.status(500).json({
       success: false,
-      message: 'Server error'
+      message: 'Server error while processing approval'
     });
   }
 };
@@ -768,16 +1342,23 @@ export const rejectCustomerUpdate = async (req, res) => {
     const { customerId } = req.params;
     const { rejectionReason } = req.body;
     
+    console.log('🔴 Admin rejecting customer update/deletion:', {
+      customerId,
+      rejectionReason: rejectionReason || 'No reason provided',
+      adminId: req.user.userId
+    });
+    
     // Validate rejection reason
     if (!rejectionReason || rejectionReason.trim() === '') {
       return res.status(400).json({
         success: false,
-        message: 'Rejection reason is required'
+        message: 'Rejection reason is required and cannot be empty'
       });
     }
     
     const customer = await User.findById(customerId);
     if (!customer) {
+      console.log('❌ Customer not found for rejection:', customerId);
       return res.status(404).json({
         success: false,
         message: 'Customer not found'
@@ -785,6 +1366,11 @@ export const rejectCustomerUpdate = async (req, res) => {
     }
     
     if (!customer.pendingUpdates || customer.pendingUpdates.status !== 'pending') {
+      console.log('❌ No pending updates found for customer rejection:', {
+        customerId,
+        hasPendingUpdates: !!customer.pendingUpdates,
+        status: customer.pendingUpdates?.status
+      });
       return res.status(400).json({
         success: false,
         message: 'No pending updates found for this customer'
@@ -794,13 +1380,21 @@ export const rejectCustomerUpdate = async (req, res) => {
     // Determine if this is a deletion request
     const isDeletion = !!customer.pendingUpdates.deleteRequested;
     
+    console.log('📋 Processing customer rejection:', {
+      customerId,
+      customerName: customer.fullName,
+      isDeletion,
+      requestType: customer.pendingUpdates.requestType,
+      rejectionReason: rejectionReason.trim()
+    });
+    
     // CRITICAL FIX: DO NOT APPLY ANY CHANGES WHEN REJECTING
     // Just mark the pending updates as rejected, don't modify the original data
     
     customer.pendingUpdates.status = 'rejected';
     customer.pendingUpdates.rejectedAt = new Date();
     customer.pendingUpdates.rejectedBy = req.user.userId;
-    customer.pendingUpdates.rejectionReason = rejectionReason;
+    customer.pendingUpdates.rejectionReason = rejectionReason.trim();
     
     // Add to status history
     if (!customer.statusHistory) customer.statusHistory = [];
@@ -808,45 +1402,66 @@ export const rejectCustomerUpdate = async (req, res) => {
       status: customer.pendingUpdates.deleteRequested ? 'deletion_rejected' : 'update_rejected',
       timestamp: new Date(),
       changedBy: req.user.userId,
-      reason: rejectionReason
+      reason: rejectionReason.trim()
     });
+    
+    console.log(`🔴 Customer ${isDeletion ? 'deletion' : 'update'} request rejected - NO CHANGES APPLIED TO ORIGINAL DATA`);
     
     // CRITICAL FIX: Send notification to customer about rejection
     try {
+      console.log('📧 Sending rejection email to customer...');
       if (customer.pendingUpdates.deleteRequested) {
-        await sendAccountDeletionRejectionEmail(customer, rejectionReason);
-        console.log('✅ Account deletion rejection email sent');
+        await sendAccountDeletionRejectionEmail(customer, rejectionReason.trim());
+        console.log('✅ Customer account deletion rejection email sent successfully');
       } else {
-        await sendCustomerUpdateRejectionEmail(customer, rejectionReason);
-        console.log('✅ Profile update rejection email sent');
+        await sendCustomerUpdateRejectionEmail(customer, rejectionReason.trim());
+        console.log('✅ Customer profile update rejection email sent successfully');
       }
     } catch (emailError) {
-      console.error('❌ Failed to send rejection email:', emailError);
+      console.error('❌ Failed to send rejection email to customer:', {
+        error: emailError.message,
+        customerId: customer._id,
+        customerName: customer.fullName,
+        isDeletion
+      });
       // Don't fail the request if email fails, but log it
     }
     
     // Save the rejection status first
     await customer.save();
     
+    console.log('💾 Customer saved with rejection status');
+    
     // Clear pending updates after rejection
     customer.pendingUpdates = null;
     await customer.save();
     
-    console.log(`✅ Customer ${isDeletion ? 'deletion' : 'update'} rejected successfully - NO CHANGES APPLIED`);
+    console.log(`✅ Customer ${isDeletion ? 'deletion' : 'update'} rejected and completed successfully`);
     
     res.status(200).json({
       success: true,
       message: isDeletion
-        ? 'Account deletion request rejected successfully. Customer has been notified via email.'
-        : 'Profile update request rejected successfully. Customer has been notified via email.',
-      customer: customer
+        ? 'Account deletion request rejected successfully. Customer has been notified via email with the reason for rejection.'
+        : 'Profile update request rejected successfully. Customer has been notified via email with the reason for rejection.',
+      rejectionDetails: {
+        customerId: customer._id,
+        customerName: customer.fullName,
+        requestType: isDeletion ? 'delete' : 'update',
+        rejectionReason: rejectionReason.trim(),
+        rejectedAt: new Date()
+      }
     });
     
   } catch (error) {
-    console.error('Error rejecting customer update:', error);
+    console.error('❌ Error rejecting customer update:', {
+      error: error.message,
+      stack: error.stack,
+      customerId: req.params.customerId,
+      rejectionReason
+    });
     res.status(500).json({
       success: false,
-      message: 'Server error'
+      message: 'Server error while processing rejection'
     });
   }
 };
@@ -862,6 +1477,8 @@ export const getCustomersWithPendingUpdates = async (req, res) => {
       });
     }
     
+    console.log('📊 Admin fetching customers with pending updates...');
+    
     const customers = await User.find({
       role: 'customer',
       'pendingUpdates.status': 'pending'
@@ -876,10 +1493,11 @@ export const getCustomersWithPendingUpdates = async (req, res) => {
       requestType: customer.pendingUpdates.deleteRequested ? 'delete' : 'update',
       requestedAt: customer.pendingUpdates.requestedAt,
       fields: customer.pendingUpdates.fields || {},
-      reason: customer.pendingUpdates.reason || ''
+      reason: customer.pendingUpdates.reason || '',
+      rejectionReason: customer.pendingUpdates.rejectionReason || ''
     }));
     
-    console.log('📊 Pending updates found:', {
+    console.log('📊 Customer pending updates found:', {
       totalCustomers: customers.length,
       updateRequests: pendingUpdates.filter(p => p.requestType === 'update').length,
       deleteRequests: pendingUpdates.filter(p => p.requestType === 'delete').length
@@ -892,10 +1510,79 @@ export const getCustomersWithPendingUpdates = async (req, res) => {
     });
     
   } catch (error) {
-    console.error('Error fetching customers with pending updates:', error);
+    console.error('❌ Error fetching customers with pending updates:', error);
     res.status(500).json({
       success: false,
-      message: 'Server error'
+      message: 'Server error while fetching pending updates'
+    });
+  }
+};
+
+// FIXED: Get service providers with pending updates with enhanced logging
+export const getServiceProvidersWithPendingUpdates = async (req, res) => {
+  try {
+    // Ensure admin privileges
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Unauthorized. Admin privileges required.'
+      });
+    }
+    
+    console.log('📊 Admin fetching service providers with pending updates...');
+    
+    const serviceProviders = await User.find({
+      role: 'serviceProvider',
+      'pendingUpdates.status': 'pending'
+    });
+    
+    console.log('📊 Raw service providers with pending updates:', {
+      count: serviceProviders.length,
+      providers: serviceProviders.map(sp => ({
+        id: sp._id,
+        businessName: sp.businessName,
+        hasPendingUpdates: !!sp.pendingUpdates,
+        status: sp.pendingUpdates?.status,
+        deleteRequested: sp.pendingUpdates?.deleteRequested,
+        requestType: sp.pendingUpdates?.requestType
+      }))
+    });
+    
+    const pendingUpdates = serviceProviders.map(provider => ({
+      _id: provider._id,
+      fullName: provider.fullName,
+      businessName: provider.businessName,
+      emailAddress: provider.emailAddress,
+      serviceProviderId: provider.serviceProviderId,
+      createdAt: provider.createdAt,
+      requestType: provider.pendingUpdates.deleteRequested ? 'delete' : 'update',
+      requestedAt: provider.pendingUpdates.requestedAt,
+      fields: provider.pendingUpdates.fields || {},
+      reason: provider.pendingUpdates.reason || '',
+      rejectionReason: provider.pendingUpdates.rejectionReason || ''
+    }));
+    
+    console.log('📊 Service Provider pending updates processed:', {
+      totalProviders: serviceProviders.length,
+      updateRequests: pendingUpdates.filter(p => p.requestType === 'update').length,
+      deleteRequests: pendingUpdates.filter(p => p.requestType === 'delete').length,
+      pendingUpdatesData: pendingUpdates
+    });
+    
+    res.status(200).json({
+      success: true,
+      count: pendingUpdates.length,
+      pendingUpdates
+    });
+    
+  } catch (error) {
+    console.error('❌ Error fetching service providers with pending updates:', {
+      error: error.message,
+      stack: error.stack
+    });
+    res.status(500).json({
+      success: false,
+      message: 'Server error while fetching pending updates'
     });
   }
 };
@@ -903,11 +1590,13 @@ export const getCustomersWithPendingUpdates = async (req, res) => {
 // ADMIN: Get all customers
 export const getCustomers = async (req, res) => {
   try {
+    console.log('📊 Admin fetching all customers...');
+    
     const customers = await User.find({ role: 'customer' })
       .select('-password')
       .sort({ createdAt: -1 });
 
-    console.log('📊 Fetched customers:', {
+    console.log('📊 Fetched customers for admin:', {
       total: customers.length,
       withPendingUpdates: customers.filter(c => c.pendingUpdates?.status === 'pending').length,
       activeCustomers: customers.filter(c => c.isActive !== false).length,
@@ -919,10 +1608,50 @@ export const getCustomers = async (req, res) => {
       customers
     });
   } catch (error) {
-    console.error('Error fetching customers for admin:', error);
+    console.error('❌ Error fetching customers for admin:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to fetch customers',
+      error: error.message
+    });
+  }
+};
+
+// FIXED: ADMIN: Get all service providers (including pending updates) with enhanced logging
+export const getServiceProviders = async (req, res) => {
+  try {
+    // Ensure admin privileges
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Unauthorized. Admin privileges required.'
+      });
+    }
+
+    console.log('📊 Admin fetching all service providers...');
+
+    const serviceProviders = await User.find({ role: 'serviceProvider' })
+      .select('-password')
+      .sort({ createdAt: -1 });
+
+    console.log('📊 Fetched service providers for admin:', {
+      total: serviceProviders.length,
+      withPendingUpdates: serviceProviders.filter(sp => sp.pendingUpdates?.status === 'pending').length,
+      activeProviders: serviceProviders.filter(sp => sp.isActive !== false).length,
+      deactivatedProviders: serviceProviders.filter(sp => sp.isActive === false).length,
+      approvedProviders: serviceProviders.filter(sp => sp.approvalStatus === 'approved').length,
+      pendingProviders: serviceProviders.filter(sp => sp.approvalStatus === 'pending').length
+    });
+
+    res.json({
+      success: true,
+      providers: serviceProviders
+    });
+  } catch (error) {
+    console.error('❌ Error fetching service providers for admin:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch service providers',
       error: error.message
     });
   }
@@ -946,7 +1675,7 @@ export const forgotPassword = async (req, res) => {
 
     if (!user) {
       // To prevent user enumeration, we send a success response even if the user doesn't exist.
-      console.log(`Password reset requested for non-existent user: ${emailAddress}`);
+      console.log(`📧 Password reset requested for non-existent user: ${emailAddress}`);
       return res.status(200).json({ 
         success: true, 
         message: 'If a user with that email exists, a reset link has been sent.' 
@@ -955,6 +1684,12 @@ export const forgotPassword = async (req, res) => {
 
     // Check if account is deactivated
     if (user.isActive === false) {
+      console.log('🚫 Password reset attempt for deactivated account:', {
+        userId: user._id,
+        email: user.emailAddress,
+        isActive: user.isActive,
+        deletedAt: user.deletedAt
+      });
       return res.status(403).json({
         success: false,
         message: 'Cannot reset password for deactivated account. Please contact support.'
@@ -1007,75 +1742,7 @@ export const forgotPassword = async (req, res) => {
   }
 };
 
-// // CRITICAL FIX: Reset Password with proper token handling
-// export const resetPassword = async (req, res) => {
-//   try {
-//     const { token } = req.params;
-//     const { password } = req.body;
-
-//     console.log('🔐 Reset password attempt:', { 
-//       tokenProvided: !!token, 
-//       passwordProvided: !!password 
-//     });
-
-//     if (!password || password.length < 8) {
-//       return res.status(400).json({ 
-//         success: false, 
-//         message: 'Password must be at least 8 characters long.' 
-//       });
-//     }
-
-//     // Hash the token from the URL to match the one in the database
-//     const resetPasswordToken = crypto
-//       .createHash('sha256')
-//       .update(token)
-//       .digest('hex');
-
-//     const user = await User.findOne({
-//       resetPasswordToken,
-//       resetPasswordExpire: { $gt: Date.now() },
-//     });
-
-//     if (!user) {
-//       console.log('❌ Invalid or expired token');
-//       return res.status(400).json({ 
-//         success: false, 
-//         message: 'Invalid or expired password reset token.' 
-//       });
-//     }
-
-//     // Check if account is deactivated
-//     if (user.isActive === false) {
-//       return res.status(403).json({
-//         success: false,
-//         message: 'Cannot reset password for deactivated account. Please contact support.'
-//       });
-//     }
-
-//     console.log('✅ Valid reset token found for user:', user.emailAddress);
-
-//     // Set new password
-//     user.password = await bcrypt.hash(password, 10);
-//     user.resetPasswordToken = undefined;
-//     user.resetPasswordExpire = undefined;
-//     await user.save();
-
-//     console.log('✅ Password reset successful for user:', user.emailAddress);
-
-//     res.status(200).json({ 
-//       success: true, 
-//       message: 'Password has been reset successfully.' 
-//     });
-//   } catch (error) {
-//     console.error('❌ Reset password error:', error);
-//     res.status(500).json({ 
-//       success: false, 
-//       message: 'Server error while resetting password.' 
-//     });
-//   }
-// };
-
-// ✅ FIX 3: Update authController.js (backend)
+// ✅ FIXED: Reset Password with proper error handling
 export const resetPassword = async (req, res) => {
   try {
     const { token } = req.params;
@@ -1128,6 +1795,12 @@ export const resetPassword = async (req, res) => {
 
     // Check if account is deactivated
     if (user.isActive === false) {
+      console.log('🚫 Password reset attempt for deactivated account:', {
+        userId: user._id,
+        email: user.emailAddress,
+        isActive: user.isActive,
+        deletedAt: user.deletedAt
+      });
       return res.status(403).json({
         success: false,
         message: 'Cannot reset password for deactivated account. Please contact support.'
@@ -1137,10 +1810,11 @@ export const resetPassword = async (req, res) => {
     console.log('✅ Valid reset token found for user:', user.emailAddress);
 
     // ✅ Hash new password and save
-    user.password = await bcrypt.hash(passwordToUse, 12);
-    user.resetPasswordToken = undefined;
-    user.resetPasswordExpire = undefined;
-    await user.save();
+  user.password = await bcrypt.hash(passwordToUse, 12);
+  user.resetPasswordToken = undefined;
+  user.resetPasswordExpire = undefined;
+  // Bypass full validation (e.g., missing nicNumber) on password reset
+  await user.save({ validateBeforeSave: false });
 
     console.log('✅ Password reset successful for user:', user.emailAddress);
 
@@ -1158,12 +1832,11 @@ export const resetPassword = async (req, res) => {
   }
 };
 
-
 // ADMIN: Approve a service provider
 export const approveServiceProvider = async (req, res) => {
   try {
     const { userId } = req.params;
-    console.log(`Admin approving service provider: ${userId}`);
+    console.log(`🟢 Admin approving service provider: ${userId}`);
 
     const provider = await User.findById(userId);
 
@@ -1187,17 +1860,24 @@ export const approveServiceProvider = async (req, res) => {
 
     await provider.save();
 
+    console.log('✅ Service provider approved:', {
+      providerId: provider._id,
+      businessName: provider.businessName,
+      serviceProviderId: provider.serviceProviderId
+    });
+
     // Send approval email
     try {
       await sendApprovalEmail(provider.emailAddress, provider.businessName, provider.fullName);
+      console.log('✅ Approval email sent successfully');
     } catch (emailError) {
-      console.error('Failed to send approval email:', emailError);
+      console.error('❌ Failed to send approval email:', emailError);
     }
 
     res.json({ success: true, message: 'Service provider approved successfully', provider });
 
   } catch (error) {
-    console.error('Error approving service provider:', error);
+    console.error('❌ Error approving service provider:', error);
     res.status(500).json({ success: false, message: 'Server error while approving provider', error: error.message });
   }
 };
@@ -1207,6 +1887,8 @@ export const rejectServiceProvider = async (req, res) => {
   try {
     const { userId } = req.params;
     const { reason } = req.body;
+
+    console.log('🔴 Admin rejecting service provider:', { userId, reason });
 
     if (!reason) {
       return res.status(400).json({ success: false, message: 'Rejection reason is required' });
@@ -1225,17 +1907,24 @@ export const rejectServiceProvider = async (req, res) => {
 
     await provider.save();
 
+    console.log('✅ Service provider rejected:', {
+      providerId: provider._id,
+      businessName: provider.businessName,
+      rejectionReason: reason
+    });
+
     // Send rejection email
     try {
       await sendRejectionEmail(provider.emailAddress, provider.businessName, provider.fullName, reason);
+      console.log('✅ Rejection email sent successfully');
     } catch (emailError) {
-      console.error('Failed to send rejection email:', emailError);
+      console.error('❌ Failed to send rejection email:', emailError);
     }
 
     res.json({ success: true, message: 'Service provider rejected successfully', provider });
 
   } catch (error) {
-    console.error('Error rejecting service provider:', error);
+    console.error('❌ Error rejecting service provider:', error);
     res.status(500).json({ success: false, message: 'Server error while rejecting provider', error: error.message });
   }
 };
@@ -1243,17 +1932,29 @@ export const rejectServiceProvider = async (req, res) => {
 // ADMIN: Get pending service providers
 export const getPendingServiceProviders = async (req, res) => {
   try {
+    console.log('📊 Admin fetching pending service providers...');
+    
     const pendingProviders = await User.find({
       role: 'serviceProvider',
       approvalStatus: 'pending'
     }).select('-password');
+
+    console.log('📊 Pending service providers found:', {
+      count: pendingProviders.length,
+      providers: pendingProviders.map(p => ({
+        id: p._id,
+        businessName: p.businessName,
+        fullName: p.fullName,
+        email: p.emailAddress
+      }))
+    });
 
     res.json({
       success: true,
       providers: pendingProviders
     });
   } catch (error) {
-    console.error('Error getting pending service providers:', error);
+    console.error('❌ Error getting pending service providers:', error);
     res.status(500).json({ success: false, message: 'Failed to fetch pending providers', error: error.message });
   }
 };
@@ -1261,17 +1962,30 @@ export const getPendingServiceProviders = async (req, res) => {
 // ADMIN: Get approved service providers
 export const getApprovedServiceProviders = async (req, res) => {
   try {
+    console.log('📊 Admin fetching approved service providers...');
+    
     const approvedProviders = await User.find({
       role: 'serviceProvider',
       approvalStatus: 'approved'
     }).select('-password');
+
+    console.log('📊 Approved service providers found:', {
+      count: approvedProviders.length,
+      providers: approvedProviders.map(p => ({
+        id: p._id,
+        businessName: p.businessName,
+        fullName: p.fullName,
+        email: p.emailAddress,
+        serviceProviderId: p.serviceProviderId
+      }))
+    });
 
     res.json({
       success: true,
       providers: approvedProviders
     });
   } catch (error) {
-    console.error('Error getting approved service providers:', error);
+    console.error('❌ Error getting approved service providers:', error);
     res.status(500).json({ success: false, message: 'Failed to fetch approved providers', error: error.message });
   }
 };
