@@ -13,6 +13,8 @@ const {
   sendServiceProviderDeleteApprovalEmail,
   sendServiceProviderDeleteRejectionEmail
 } = mailer;
+import Booking from '../models/Booking.js';
+import { notifyServiceStatusChange, createNotification } from './notificationController.js';
 import { generateServiceProviderSerial, generateServiceSerial } from '../Utils/serialGenerator.js';
 import { getExistingServiceProviderId } from '../Utils/serialGenerator.js';
 
@@ -1106,8 +1108,100 @@ export const approveServiceChanges = async (req, res) => {
       }
     }
     
-    // Return complete updated service data
-    const updatedService = await Service.findById(savedService._id)
+  // Emit real-time notification to service provider
+  try {
+    await notifyServiceStatusChange(savedService, savedService.status, req.user.userId);
+    console.log('🔔 Real-time service status change notification sent to provider');
+  } catch (notifyError) {
+    console.error('❌ Error emitting service status change notification:', notifyError);
+  }
+  // Notify customers of service unavailability if deleted
+  if (savedService.status === 'deleted') {
+    // Service deletion approved: notify affected customers
+    console.log('🗑️ Service deletion approved for service:', {
+      serviceId: savedService._id,
+      serviceName: savedService.name,
+      serviceType: savedService.type,
+      serviceStatus: savedService.status
+    });
+    
+    try {
+      // Determine providerId for booking lookup
+      const providerId = savedService.serviceProvider && savedService.serviceProvider._id
+        ? savedService.serviceProvider._id.toString()
+        : savedService.serviceProvider.toString();
+      
+      console.log('🔍 Looking up bookings with providerId:', providerId);
+      
+      // Fetch all pending or confirmed bookings for this provider
+      // FIXED: Only look up by serviceProviderId to ensure we find ALL affected bookings
+      const bookings = await Booking.find({
+        serviceProviderId: providerId,
+        status: { $in: ['pending', 'confirmed'] }
+      });
+      
+      console.log(`🔍 Found ${bookings.length} active bookings for provider ${providerId}. Details:`, 
+        bookings.map(b => ({
+          bookingId: b._id,
+          customerId: b.customerId,
+          serviceName: b.serviceName,
+          bookingDate: b.bookingDate,
+          status: b.status
+        }))
+      );
+      
+      // If no bookings found, log a warning
+      if (bookings.length === 0) {
+        console.log(`⚠️ No active bookings found for provider ${providerId}`);
+      }
+      
+      // Process each booking
+      let notificationCount = 0;
+      for (const booking of bookings) {
+        console.log(`🔔 Processing notification for customer ${booking.customerId} about service "${booking.serviceName}"`);
+        
+        try {
+          // Create the notification with detailed logging
+          // FIXED: Using 'serviceUnavailable' type which is defined in the Notification schema
+          const notification = await createNotification({
+            sender: 'system',
+            receiver: booking.customerId.toString(),
+            message: `The service "${savedService.name}" you booked on ${booking.bookingDate.toLocaleDateString()} is now unavailable and your booking has been cancelled.`,
+            type: 'serviceUnavailable', // This type is defined in the Notification schema
+            data: { 
+              serviceId: savedService._id.toString(), 
+              bookingId: booking._id.toString(),
+              serviceName: savedService.name,
+              cancelReason: 'Service deleted by provider'
+            }
+          });
+          
+          console.log(`✅ Notification created successfully:`, {
+            notificationId: notification._id,
+            customerId: booking.customerId.toString(),
+            message: notification.message,
+            type: notification.type,
+            timestamp: notification.timestamp
+          });
+          
+          // Cancel the booking
+          booking.status = 'cancelled';
+          await booking.save();
+          console.log(`🛑 Booking ${booking._id} status updated to cancelled`);
+          
+          notificationCount++;
+        } catch (notificationError) {
+          console.error(`❌ Error creating notification for customer ${booking.customerId}:`, notificationError);
+        }
+      }
+      
+      console.log(`✅ Completed notifications process: ${notificationCount} notifications created out of ${bookings.length} bookings`);
+    } catch (err) {
+      console.error('❌ Error in customer notification process:', err);
+    }
+  }
+  // Return complete updated service data
+  const updatedService = await Service.findById(savedService._id)
       .populate('serviceProvider', 'fullName businessName emailAddress mobileNumber businessType city isOnline serviceProviderId')
       .lean();
 

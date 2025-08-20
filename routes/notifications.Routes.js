@@ -1,7 +1,13 @@
 //routes/notifications.Routes.js - COMPLETE WORKING VERSION
 import express from 'express';
 import { protect, authorize } from '../middleware/authMiddleware.js';
-import { getNotifications, markAsRead } from '../config/notifications.js';
+import { 
+  fetchNotifications, 
+  markNotificationAsRead, 
+  markAllNotificationsAsRead,
+  getUnreadCount,
+  createNotification
+} from '../controllers/notificationController.js';
 import { 
   approveServiceProvider, 
   rejectServiceProvider 
@@ -17,81 +23,60 @@ router.use((req, res, next) => {
   next();
 });
 
-// Get all notifications (admin only)
-router.get('/', protect, authorize('admin'), (req, res) => {
+// Get all notifications (for current user)
+router.get('/', protect, fetchNotifications);
+
+// Get unread notification count
+router.get('/unread/count', protect, getUnreadCount);
+
+// Get notifications for a specific user (public endpoint with userId)
+router.get('/:userId', fetchNotifications);
+
+// Mark specific notification as read
+router.put('/:notificationId/read', protect, markNotificationAsRead);
+
+// Mark all notifications as read
+router.put('/read/all', protect, markAllNotificationsAsRead);
+
+// Test endpoint to create a notification (for development/testing)
+router.post('/test', protect, (req, res) => {
   try {
-    const notifications = getNotifications();
-    res.json({
-      success: true,
-      notifications
-    });
-  } catch (error) {
-    console.error('Error fetching notifications:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to fetch notifications'
-    });
-  }
-});
-
-// 🔧 CRITICAL FIX: Provider approval/rejection routes that match frontend calls
-router.put('/providers/:providerId/approve', protect, authorize('admin'), (req, res) => {
-  console.log('🔍 Notification approve route hit with Provider ID:', req.params.providerId);
-  
-  // Map providerId to userId for controller compatibility
-  req.params.userId = req.params.providerId;
-  
-  // Call the approve function directly (not async wrapper)
-  approveServiceProvider(req, res);
-});
-
-router.put('/providers/:providerId/reject', protect, authorize('admin'), (req, res) => {
-  console.log('🔍 Notification reject route hit with Provider ID:', req.params.providerId);
-  
-  // Map providerId to userId for controller compatibility
-  req.params.userId = req.params.providerId;
-  
-  // Call the reject function directly (not async wrapper)
-  rejectServiceProvider(req, res);
-});
-
-// Alternative POST routes for compatibility
-router.post('/providers/:providerId/approve', protect, authorize('admin'), (req, res) => {
-  console.log('🔍 Notification POST approve route hit with Provider ID:', req.params.providerId);
-  req.params.userId = req.params.providerId;
-  approveServiceProvider(req, res);
-});
-
-router.post('/providers/:providerId/reject', protect, authorize('admin'), (req, res) => {
-  console.log('🔍 Notification POST reject route hit with Provider ID:', req.params.providerId);
-  req.params.userId = req.params.providerId;
-  rejectServiceProvider(req, res);
-});
-
-// Mark notification as read
-router.put('/:id/read', protect, authorize('admin'), (req, res) => {
-  try {
-    const { id } = req.params;
-    const notification = markAsRead(id);
+    const { sender, receiver, message, type } = req.body;
     
-    if (!notification) {
-      return res.status(404).json({
+    if (!receiver || !message) {
+      return res.status(400).json({
         success: false,
-        message: 'Notification not found'
+        message: 'Receiver and message are required'
       });
     }
     
-    res.json({
-      success: true,
-      notification
+    createNotification({
+      sender: sender || req.user.userId || 'system',
+      receiver,
+      message,
+      type: type || 'system',
+      data: req.body.data || {}
+    }).then(notification => {
+      res.json({
+        success: true,
+        message: 'Test notification created',
+        notification
+      });
+    }).catch(error => {
+      throw error;
     });
   } catch (error) {
-    console.error('Error marking notification as read:', error);
+    console.error('Error creating test notification:', error);
     res.status(500).json({
       success: false,
-      message: 'Failed to mark notification as read'
+      message: 'Failed to create test notification',
+      error: error.message
     });
   }
 });
+
+// Provider approval/rejection routes
+router.put('/providers/:requestId/approve', protect, authorize('admin'), approveServiceProvider);
+router.put('/providers/:requestId/reject', protect, authorize('admin'), rejectServiceProvider);
 
 export default router;
