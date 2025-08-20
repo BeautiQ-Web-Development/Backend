@@ -18,6 +18,9 @@ import {
   sendServiceProviderRequestNotificationToAdmin
 } from '../config/mailer.js';
 import crypto from 'crypto';
+import Service from '../models/Service.js';
+import Booking from '../models/Booking.js';
+import { createNotification } from './notificationController.js';
 
 // Import BOTH functions from serial generator
 import { generateServiceProviderSerial } from '../Utils/serialGenerator.js';
@@ -248,6 +251,10 @@ export const register = async (req, res) => {
         isActive: savedUser.isActive
       }
     });
+    // Emit real-time notification: new customer registration
+    if (role === 'customer') {
+      await notifyNewCustomerRegistration(savedUser);
+    }
 
   } catch (error) {
     console.error('❌ Registration error:', error);
@@ -910,17 +917,84 @@ export const approveServiceProviderUpdate = async (req, res) => {
         deletionReason: serviceProvider.deletionReason
       });
       
-      // Send deletion approval email with thank you note
+      // Mark all services of provider as deleted and unavailable
       try {
-        console.log('📧 Sending deletion approval email to service provider...');
-        await sendServiceProviderDeleteApprovalEmail(serviceProvider);
-        console.log('✅ Service provider deletion approval email sent successfully');
-      } catch (emailError) {
-        console.error('❌ Failed to send deletion approval email:', {
-          error: emailError.message,
-          providerId: serviceProvider._id,
-          businessName: serviceProvider.businessName
+        // Populate provider email for notifications
+        const services = await Service.find({ serviceProvider: providerId })
+          .populate('serviceProvider', 'emailAddress businessName');
+        
+        console.log(`🗑️ Marking ${services.length} services as unavailable for deleted provider ${serviceProvider.businessName}`);
+        
+        // Get all affected customers in one query
+        const bookings = await Booking.find({
+          serviceProviderId: providerId,
+          status: { $ne: 'cancelled' }
         });
+        
+        const customerIds = [...new Set(bookings.map(b => b.customerId.toString()))];
+        console.log(`📣 Found ${customerIds.length} affected customers to notify about ${services.length} unavailable services`);
+        
+        // Update all services in one batch
+        for (const svc of services) {
+          svc.status = 'deleted';
+          svc.isActive = false;
+          svc.availabilityStatus = 'No Longer Available';
+          svc.deletedAt = new Date();
+          svc.deletedBy = req.user.userId;
+          await svc.save();
+          
+          // Send individual service notifications to affected customers
+          for (const customerId of customerIds) {
+            await createNotification({
+              sender: req.user.userId,
+              receiver: customerId,
+              message: `Service "${svc.name}" is no longer available as its provider has been deactivated.`,
+              type: 'serviceUnavailable',
+              data: {
+                serviceId: svc._id,
+                serviceName: svc.name,
+                providerEmail: svc.serviceProvider.emailAddress,
+                providerName: svc.serviceProvider.businessName,
+                reason: `Provider ${serviceProvider.businessName} has been deleted from the platform.`
+              }
+            });
+          }
+        }
+        console.log(`✅ Successfully updated ${services.length} services and sent notifications to ${customerIds.length} customers`);
+      } catch (svcError) {
+        console.error('❌ Error marking services deleted or notifying customers:', svcError);
+      }
+      // Notify all active customers of provider unavailability
+      try {
+        console.log(`📊 Status change tracked: provider account → deleted`);
+        const customers = await User.find({ role: 'customer', isActive: true }).select('_id');
+        console.log(`🔍 Found ${customers.length} active customers to notify about provider ${serviceProvider.businessName} unavailability`);
+        
+        let notificationCount = 0;
+        for (const cust of customers) {
+          try {
+            // Using the newly added notification type
+            await createNotification({
+              sender: req.user.userId,
+              receiver: cust._id.toString(),
+              message: `Service provider "${serviceProvider.businessName}" is no longer available.`,
+              type: 'providerUnavailable', // This type is now added to the Notification schema
+              data: {
+                providerId: serviceProvider._id,
+                providerName: serviceProvider.businessName,
+                reason: 'Provider account deleted',
+                email: serviceProvider.emailAddress,
+                businessName: serviceProvider.businessName
+              }
+            });
+            notificationCount++;
+          } catch (notifyErr) {
+            console.error(`❌ Error creating notification for customer ${cust._id}:`, notifyErr);
+          }
+        }
+        console.log(`✅ Created ${notificationCount} notifications out of ${customers.length} customers`);
+      } catch (custErr) {
+        console.error('❌ Error notifying customers of provider unavailability:', custErr);
       }
     } else {
       // Handle update request - Apply the pending updates
@@ -1982,7 +2056,7 @@ export const getApprovedServiceProviders = async (req, res) => {
 
     res.json({
       success: true,
-      providers: approvedProviders
+      data: approvedProviders
     });
   } catch (error) {
     console.error('❌ Error getting approved service providers:', error);
