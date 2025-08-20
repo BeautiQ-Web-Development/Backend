@@ -1,10 +1,38 @@
 import mongoose from 'mongoose';
 
 const NotificationSchema = new mongoose.Schema({
-  type: { type: String, required: true },
-  payload: { type: mongoose.Schema.Types.Mixed },
-  read: { type: Boolean, default: false },
-  createdAt: { type: Date, default: Date.now }
+  sender: { 
+    type: String, 
+    required: true 
+  },
+  receiver: { 
+    type: String, 
+    required: true, 
+    index: true // Add index for faster queries by receiver
+  },
+  message: { 
+    type: String, 
+    required: true 
+  },
+  type: {
+    type: String,
+    enum: ['serviceApproved', 'newCustomer', 'customerDeleted', 'serviceRejected', 'newServiceProvider', 'serviceUnavailable', 'providerUnavailable'],
+    default: 'serviceApproved'
+  },
+  read: { 
+    type: Boolean, 
+    default: false 
+  },
+  data: { 
+    type: mongoose.Schema.Types.Mixed // For any additional data relevant to the notification
+  },
+  timestamp: { 
+    type: Date, 
+    default: Date.now 
+  }
 });
+
+// Index for efficient querying of unread notifications
+NotificationSchema.index({ receiver: 1, read: 1 });
 
 export default mongoose.model('Notification', NotificationSchema);

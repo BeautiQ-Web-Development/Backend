@@ -7,6 +7,8 @@ import fs from 'fs';
 import path from 'path';
 import bodyParser from 'body-parser';
 import multer from 'multer';           // add multer
+import { createServer } from 'http';
+import { initializeSocket } from './socket.js';
 import {
   register,
   login,
@@ -22,6 +24,7 @@ import notificationRoutes from './routes/notifications.Routes.js';
 // import { transporter } from './config/mailer.js';
 
 dotenv.config();
+// Initialize Express app
 const app = express();
 const SECRET = process.env.JWT_SECRET || 'your_jwt_secret';
 
@@ -215,8 +218,17 @@ app.use('*', (req, res) => {
   });
 });
 
+// Initialize HTTP server with Express
+const httpServer = createServer(app);
+
+// Initialize Socket.IO with the HTTP server
+const io = initializeSocket(httpServer);
+
+// Export io for use in other files
+export const getIo = () => io;
+
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => {
+httpServer.listen(PORT, () => {
   console.log(`✓ Server is running on port ${PORT}`);
   console.log(`✓ Environment: ${process.env.NODE_ENV}`);
 });

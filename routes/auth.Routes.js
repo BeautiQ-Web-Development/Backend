@@ -77,6 +77,9 @@ router.get('/verify-token', verifyToken);
 router.post('/forgot-password', forgotPassword);
 router.post('/reset-password/:token', resetPassword);
 
+// PUBLIC ROUTE: fetch approved service providers for customers
+router.get('/approved-service-providers', getApprovedServiceProviders);
+
 // PROTECTED ROUTES (require authentication)
 router.use(protect); // All routes below require authentication
 
@@ -105,7 +108,7 @@ router.put('/admin/reject-service-provider-update/:providerId', authorize('admin
 
 // ADMIN ROUTES - Service Provider Approval (for new registrations)
 router.get('/pending-providers', authorize('admin'), getPendingServiceProviders);
-router.get('/approved-service-providers', authorize('admin'), getApprovedServiceProviders);
+// Duplicate admin route removed: use public '/approved-service-providers' above for customers
 router.put('/approve-provider/:userId', authorize('admin'), approveServiceProvider);
 router.put('/reject-provider/:userId', authorize('admin'), rejectServiceProvider);
 
