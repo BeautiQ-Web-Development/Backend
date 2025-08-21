@@ -25,7 +25,8 @@ import {
   approveServiceProvider,
   rejectServiceProvider,
   getPendingServiceProviders,
-  getApprovedServiceProviders
+  getApprovedServiceProviders,
+  getDashboardData
 } from '../controllers/authController.js';
 
 const router = express.Router();
@@ -111,6 +112,14 @@ router.get('/pending-providers', authorize('admin'), getPendingServiceProviders)
 // Duplicate admin route removed: use public '/approved-service-providers' above for customers
 router.put('/approve-provider/:userId', authorize('admin'), approveServiceProvider);
 router.put('/reject-provider/:userId', authorize('admin'), rejectServiceProvider);
+
+// Admin dashboard data
+router.get(
+  '/admin/dashboard-data',
+  protect,
+  authorize('admin'),
+  getDashboardData
+);
 
 // Error handling middleware for multer
 router.use((error, req, res, next) => {
