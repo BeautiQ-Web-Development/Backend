@@ -2063,3 +2063,228 @@ export const getApprovedServiceProviders = async (req, res) => {
     res.status(500).json({ success: false, message: 'Failed to fetch approved providers', error: error.message });
   }
 };
+
+//controllers/authController.js - ENHANCED getDashboardData function
+export const getDashboardData = async (req, res) => {
+  try {
+    console.log('📊 Fetching comprehensive admin dashboard data...');
+    
+    // Basic user counts
+    const customerCount = await User.countDocuments({ role: 'customer' });
+    const serviceProviderCount = await User.countDocuments({
+      role: 'serviceProvider',
+      approvalStatus: 'approved'
+    });
+    const pendingApprovalCount = await User.countDocuments({
+      role: 'serviceProvider',
+      approvalStatus: 'pending'
+    });
+    const totalUsers = customerCount + serviceProviderCount;
+
+    // 1. PENDING NEW SERVICE APPROVALS
+    const pendingServiceApprovals = await Service.countDocuments({
+      status: 'pending_approval',
+      $or: [
+        { pendingChanges: null },
+        { pendingChanges: { $exists: false } },
+        { 'pendingChanges.actionType': { $nin: ['update', 'delete'] } }
+      ]
+    });
+
+    // 2. DELETED SERVICES
+    const deletedServicesCount = await Service.countDocuments({
+      status: 'deleted'
+    });
+
+    // 3. REASSIGN USERS (Customer and Service Provider deletion requests)
+    const customerDeleteRequests = await User.countDocuments({
+      role: 'customer',
+      'pendingUpdates.status': 'pending',
+      'pendingUpdates.deleteRequested': true
+    });
+
+    const providerDeleteRequests = await User.countDocuments({
+      role: 'serviceProvider',
+      'pendingUpdates.status': 'pending',
+      'pendingUpdates.deleteRequested': true
+    });
+
+    const deleteRequestsData = {
+      customers: customerDeleteRequests,
+      serviceProviders: providerDeleteRequests
+    };
+
+    // 4. NEW SERVICE PROVIDERS (Monthly Trend - Last 30 days)
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
+    // Get daily provider registrations for the last 30 days
+    const newProviderPipeline = [
+      {
+        $match: {
+          role: 'serviceProvider',
+          createdAt: { $gte: thirtyDaysAgo }
+        }
+      },
+      {
+        $group: {
+          _id: {
+            year: { $year: '$createdAt' },
+            month: { $month: '$createdAt' },
+            day: { $dayOfMonth: '$createdAt' }
+          },
+          count: { $sum: 1 }
+        }
+      },
+      {
+        $sort: { '_id.year': 1, '_id.month': 1, '_id.day': 1 }
+      }
+    ];
+
+    const newProvidersRaw = await User.aggregate(newProviderPipeline);
+    
+    // Format data for chart
+    const newProvidersData = newProvidersRaw.map(item => ({
+      date: `${item._id.year}-${String(item._id.month).padStart(2, '0')}-${String(item._id.day).padStart(2, '0')}`,
+      count: item.count
+    }));
+
+    // 5. SERVICE UPDATE REQUESTS
+    const serviceUpdateRequests = await Service.countDocuments({
+      'pendingChanges.actionType': 'update'
+    });
+
+    // Get daily service update requests for the last 30 days
+    const updateRequestsPipeline = [
+      {
+        $match: {
+          'pendingChanges.actionType': 'update',
+          'pendingChanges.requestedAt': { $gte: thirtyDaysAgo }
+        }
+      },
+      {
+        $group: {
+          _id: {
+            year: { $year: '$pendingChanges.requestedAt' },
+            month: { $month: '$pendingChanges.requestedAt' },
+            day: { $dayOfMonth: '$pendingChanges.requestedAt' }
+          },
+          count: { $sum: 1 }
+        }
+      },
+      {
+        $sort: { '_id.year': 1, '_id.month': 1, '_id.day': 1 }
+      }
+    ];
+
+    const serviceUpdateRequestsRaw = await Service.aggregate(updateRequestsPipeline);
+    
+    const serviceUpdateRequestsData = serviceUpdateRequestsRaw.map(item => ({
+      date: `${item._id.year}-${String(item._id.month).padStart(2, '0')}-${String(item._id.day).padStart(2, '0')}`,
+      count: item.count
+    }));
+
+    // 6. APPOINTMENTS PER DAY (Last 30 days)
+    const appointmentsPipeline = [
+      {
+        $match: {
+          createdAt: { $gte: thirtyDaysAgo },
+          status: { $in: ['pending', 'confirmed', 'completed'] }
+        }
+      },
+      {
+        $group: {
+          _id: {
+            year: { $year: '$createdAt' },
+            month: { $month: '$createdAt' },
+            day: { $dayOfMonth: '$createdAt' }
+          },
+          count: { $sum: 1 }
+        }
+      },
+      {
+        $sort: { '_id.year': 1, '_id.month': 1, '_id.day': 1 }
+      }
+    ];
+
+    const appointmentsRaw = await Booking.aggregate(appointmentsPipeline);
+    
+    const appointmentsPerDayData = appointmentsRaw.map(item => ({
+      date: `${item._id.year}-${String(item._id.month).padStart(2, '0')}-${String(item._id.day).padStart(2, '0')}`,
+      count: item.count
+    }));
+
+    // Additional metrics for comprehensive dashboard
+    const totalServiceUpdateRequests = await Service.countDocuments({
+      'pendingChanges.actionType': 'update'
+    });
+
+    const totalDeleteRequests = await Service.countDocuments({
+      'pendingChanges.actionType': 'delete'
+    });
+
+    const totalActiveServices = await Service.countDocuments({
+      status: 'approved',
+      isActive: true
+    });
+
+    const totalBookings = await Booking.countDocuments();
+    const pendingBookings = await Booking.countDocuments({ status: 'pending' });
+    const completedBookings = await Booking.countDocuments({ status: 'completed' });
+
+    console.log('📊 Dashboard data compiled:', {
+      customerCount,
+      serviceProviderCount,
+      pendingApprovalCount,
+      totalUsers,
+      pendingServiceApprovals,
+      deletedServicesCount,
+      deleteRequestsData,
+      newProvidersDataPoints: newProvidersData.length,
+      serviceUpdateRequests,
+      appointmentsDataPoints: appointmentsPerDayData.length
+    });
+
+    return res.json({
+      success: true,
+      customerCount,
+      serviceProviderCount,
+      pendingApprovalCount,
+      totalUsers,
+      
+      // Enhanced metrics
+      pendingServiceApprovals,
+      deletedServicesCount,
+      deleteRequestsData,
+      newProvidersData,
+      serviceUpdateRequestsData,
+      serviceUpdateRequests: totalServiceUpdateRequests,
+      appointmentsPerDayData,
+      
+      // Additional dashboard metrics
+      additionalMetrics: {
+        totalActiveServices,
+        totalDeleteRequests,
+        totalBookings,
+        pendingBookings,
+        completedBookings,
+        totalServiceRequests: totalServiceUpdateRequests + totalDeleteRequests
+      },
+      
+      // Summary for quick overview
+      summary: {
+        totalPendingActions: pendingServiceApprovals + customerDeleteRequests + providerDeleteRequests + totalServiceUpdateRequests,
+        totalServices: await Service.countDocuments(),
+        activeProviders: serviceProviderCount,
+        totalCustomers: customerCount
+      }
+    });
+  } catch (err) {
+    console.error('❌ Error fetching dashboard data:', err);
+    return res.status(500).json({ 
+      success: false, 
+      message: 'Server error while fetching dashboard data',
+      error: err.message 
+    });
+  }
+};
