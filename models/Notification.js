@@ -16,7 +16,19 @@ const NotificationSchema = new mongoose.Schema({
   },
   type: {
     type: String,
-    enum: ['serviceApproved', 'newCustomer', 'customerDeleted', 'serviceRejected', 'newServiceProvider', 'serviceUnavailable', 'providerUnavailable'],
+    enum: [
+      'serviceApproved', 
+      'newCustomer', 
+      'customerDeleted', 
+      'serviceRejected', 
+      'newServiceProvider', 
+      'serviceUnavailable', 
+      'providerUnavailable', 
+      'booking_confirmation',
+      'admin_booking_alert',
+      'payment_success',
+      'payment_failed'
+    ],
     default: 'serviceApproved'
   },
   read: { 

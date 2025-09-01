@@ -7,6 +7,24 @@ export const createNotification = async ({ sender, receiver, message, type, data
   try {
     console.log(`📝 Creating notification: ${type} from ${sender} to ${receiver}`);
     
+    // Handle cases where receiver might be undefined or null
+    if (!receiver) {
+      console.warn('⚠️ Attempted to create notification with no receiver, skipping');
+      return null;
+    }
+    
+    // Validate that receiver exists in the database
+    try {
+      const receiverExists = await User.exists({ _id: receiver });
+      if (!receiverExists) {
+        console.warn(`⚠️ Receiver ${receiver} does not exist in the database, skipping notification`);
+        return null;
+      }
+    } catch (userErr) {
+      console.error('❌ Error checking receiver existence:', userErr);
+      // Continue anyway as the receiver ID might be valid but in different format
+    }
+    
     const notification = new Notification({
       sender,
       receiver,
@@ -32,7 +50,8 @@ export const createNotification = async ({ sender, receiver, message, type, data
     return savedNotification;
   } catch (error) {
     console.error('❌ Error creating notification:', error);
-    throw error;
+    // Return null instead of throwing to avoid breaking calling code
+    return null;
   }
 };
 
@@ -89,12 +108,35 @@ export const markNotificationAsRead = async (req, res) => {
       });
     }
     
+    // If this is a booking-related notification with customerId in data
+    // fetch the customer details including customerId
+    let customerDetails = null;
+    if (notification.data && notification.data.customerId) {
+      const custId = notification.data.customerId;
+      let customer = null;
+      // Determine if custId is a valid Mongo ObjectId
+      if (/^[0-9a-fA-F]{24}$/.test(custId)) {
+        customer = await User.findById(custId);
+      } else {
+        // Fallback to custom customerId field
+        customer = await User.findOne({ customerId: custId });
+      }
+      if (customer) {
+        customerDetails = {
+          customerId: customer.customerId || 'Unknown ID',
+          fullName: customer.fullName,
+          emailAddress: customer.emailAddress
+        };
+      }
+    }
+    
     console.log(`✅ Notification ${notificationId} marked as read`);
     
     return res.json({ 
       success: true, 
       message: 'Notification marked as read',
-      notification 
+      notification,
+      customerDetails // Include customer details in response
     });
   } catch (error) {
     console.error('❌ Error marking notification as read:', error);

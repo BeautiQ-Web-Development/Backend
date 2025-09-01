@@ -1586,10 +1586,30 @@ export const getServiceById = async (req, res) => {
       });
     }
     
-    // Check access permissions
-    const canAccess = req.user.role === 'admin' || 
-                     service.serviceProvider._id.toString() === req.user.userId ||
-                     (service.status === 'approved' && req.user.role === 'customer');
+    // Check access permissions - Allow customers to view service details
+    // For payment flow, we need to relax this check as customers need access to service details
+    // for payment processing regardless of service status
+    let canAccess = req.user.role === 'admin' || 
+                   (service.serviceProvider._id && service.serviceProvider._id.toString() === req.user.userId);
+                   
+    // If customer role, allow access for payment processing
+    if (req.user.role === 'customer') {
+      // Check URL parameters to see if we're in payment flow
+      const isPaymentFlow = req.query.payment === 'true' || 
+                           req.originalUrl.includes('payment');
+      
+      console.log('Access check for customer:', {
+        serviceId: service._id,
+        isPaymentFlow,
+        queryParams: req.query,
+        serviceStatus: service.status,
+        canAccess: isPaymentFlow || service.status === 'approved'
+      });
+      
+      if (isPaymentFlow || service.status === 'approved') {
+        canAccess = true;
+      }
+    }
     
     if (!canAccess) {
       return res.status(403).json({
@@ -1649,7 +1669,15 @@ export const getAllServices = async (req, res) => {
       });
     }
 
-    let query = { status: 'approved', isActive: true };
+    let query = { 
+      status: 'approved', 
+      isActive: true,
+      // Explicitly exclude deleted services and services from deleted providers
+      $and: [
+        { status: { $ne: 'deleted' } },
+        { isVisible: { $ne: false } }
+      ]
+    };
 
     if (providerId) {
       query.serviceProvider = providerId;

@@ -14,14 +14,38 @@ import {
   rejectServiceChanges,
   uploadServiceImages
 } from '../controllers/serviceController.js';
-import { protect, authorize, rateLimit } from '../middleware/authMiddleware.js';
+import { protect, authorize, rateLimit as authRateLimit } from '../middleware/authMiddleware.js';
 import { requireServiceOwnership } from '../middleware/serviceMiddleware.js';
-import { getAvailableSlots } from '../controllers/appointmentController.js';
+import { getAvailableSlots } from '../controllers/bookingController.js';
+import expressRateLimit from 'express-rate-limit';
+import User from '../models/User.js';
 
 const router = express.Router();
 
+// Public endpoint for stats (inline handler)
+router.get('/stats', async (req, res) => {
+  try {
+    const customerCount = await User.countDocuments({ role: 'customer' });
+    const providerCount = await User.countDocuments({ role: 'serviceProvider', approvalStatus: 'approved' });
+    const serviceCount = await Service.countDocuments({ status: 'approved', isActive: true });
+    res.json({ success: true, data: { customers: customerCount, providers: providerCount, services: serviceCount } });
+  } catch (error) {
+    console.error('Error fetching stats inline:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// Specific limiter for available slots API to prevent the 429 errors
+const availableSlotsRateLimiter = expressRateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 5, // Limit each IP to 5 requests per minute
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: 'Too many slot requests, please try again after 1 minute'
+});
+
 // Apply rate limiting to all service routes
-router.use(rateLimit(200, 15 * 60 * 1000)); // 200 requests per 15 minutes
+router.use(authRateLimit(200, 15 * 60 * 1000)); // 200 requests per 15 minutes
 
 // Debug middleware to help troubleshoot issues
 const debugMiddleware = (req, res, next) => {
@@ -178,7 +202,7 @@ router.delete('/:serviceId', protect, authorize('serviceProvider'), requireServi
 // Individual service routes
 router.get('/:serviceId', protect, getServiceById);
 // New endpoint to get available slots for a service
-router.get('/:serviceId/available-slots', getAvailableSlots);
+router.get('/:serviceId/available-slots', availableSlotsRateLimiter, getAvailableSlots);
 
 // Serve service images with error handling
 router.use('/images', (req, res, next) => {

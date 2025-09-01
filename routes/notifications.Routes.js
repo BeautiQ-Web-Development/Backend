@@ -39,9 +39,9 @@ router.put('/:notificationId/read', protect, markNotificationAsRead);
 router.put('/read/all', protect, markAllNotificationsAsRead);
 
 // Test endpoint to create a notification (for development/testing)
-router.post('/test', protect, (req, res) => {
+router.post('/test', async (req, res) => {
   try {
-    const { sender, receiver, message, type } = req.body;
+    const { sender, receiver, message, type, data } = req.body;
     
     if (!receiver || !message) {
       return res.status(400).json({
@@ -50,21 +50,27 @@ router.post('/test', protect, (req, res) => {
       });
     }
     
-    createNotification({
-      sender: sender || req.user.userId || 'system',
+    const notification = await createNotification({
+      sender: sender || (req.user ? req.user.userId : 'system'),
       receiver,
       message,
       type: type || 'system',
-      data: req.body.data || {}
-    }).then(notification => {
+      data: data || {}
+    });
+    
+    if (notification) {
       res.json({
         success: true,
         message: 'Test notification created',
         notification
       });
-    }).catch(error => {
-      throw error;
-    });
+    } else {
+      res.status(500).json({
+        success: false,
+        message: 'Failed to create notification',
+        error: 'Notification creation returned null'
+      });
+    }
   } catch (error) {
     console.error('Error creating test notification:', error);
     res.status(500).json({
