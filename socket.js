@@ -85,28 +85,33 @@ export const initializeSocket = (server) => {
 
   // Add custom methods to the io instance for easier access
   io.emitToUser = (userId, event, data) => {
-    if (connectedUsers[userId] && connectedUsers[userId].size > 0) {
-      io.to(userId).emit(event, data);
-      console.log(`📨 Emitted ${event} to user ${userId}`);
+    if (!userId) {
+      console.error('❌ Cannot emit to null/undefined userId');
+      return false;
+    }
+    
+    const userIdStr = userId.toString();
+    
+    if (connectedUsers[userIdStr] && connectedUsers[userIdStr].size > 0) {
+      io.to(userIdStr).emit(event, data);
+      console.log(`📨 Emitted ${event} to user ${userIdStr}`);
       
       // Enhanced logging for service unavailability notifications
-      if (event === 'newNotification' && 
-         (data.type === 'serviceUnavailable' || data.type === 'providerUnavailable')) {
-        console.log(`🔔 Real-time ${data.type} notification sent to user ${userId}:`, {
+      if (event === 'newNotification') {
+        console.log(`🔔 Real-time notification sent to user ${userIdStr}:`, {
           message: data.message,
           type: data.type,
           dataFields: Object.keys(data.data || {})
         });
       }
-      
       return true;
     } else {
-      console.log(`⚠️ User ${userId} not connected, notification will be delivered when they connect`);
+      console.log(`⚠️ User ${userIdStr} not connected, notification queued for later delivery`);
       
       // Enhanced logging for service unavailability notifications
       if (event === 'newNotification' && 
          (data.type === 'serviceUnavailable' || data.type === 'providerUnavailable')) {
-        console.log(`📌 Queued ${data.type} notification for offline user ${userId}:`, {
+        console.log(`📌 Queued ${data.type} notification for offline user ${userIdStr}:`, {
           message: data.message,
           type: data.type
         });

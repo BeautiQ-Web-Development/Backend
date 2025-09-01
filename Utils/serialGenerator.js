@@ -1,6 +1,7 @@
 //Utils/serialGenerator.js - FIXED SERVICE ID GENERATION WITH SP PREFIX
 import Service from '../models/Service.js';
 import User from '../models/User.js';
+import mongoose from 'mongoose';
 
 // FIXED: Generate Service Serial Number with SP prefix (matching your expectation)
 export const generateServiceSerial = async () => {
@@ -39,11 +40,11 @@ export const generateServiceProviderSerial = async () => {
   try {
     console.log('🔍 generateServiceProviderSerial called');
     
-    // Check existing service provider IDs in User model (ONLY approved ones)
-    // FIXED: Using SP prefix (not SPR) to match User model validation
+    // ENHANCED: Check ALL existing service provider IDs in User model (regardless of status, active state, or deletion)
+    // This ensures we never reuse an ID even if service providers leave the system
+    
+    // First approach: Check current providers (active or not, even deleted ones)
     const lastProvider = await User.findOne({
-      role: 'serviceProvider',
-      approvalStatus: 'approved',
       serviceProviderId: { $regex: /^SP\d{3}$/ } // SP followed by exactly 3 digits
     }).sort({ serviceProviderId: -1 });
     
@@ -51,9 +52,49 @@ export const generateServiceProviderSerial = async () => {
     if (lastProvider && lastProvider.serviceProviderId) {
       const lastNumber = parseInt(lastProvider.serviceProviderId.replace('SP', ''), 10);
       nextNumber = lastNumber + 1;
+    } else {
+      // If no service providers with IDs found, query historical records using more comprehensive approach
+      const highestIdRecord = await User.aggregate([
+        {
+          $match: { 
+            serviceProviderId: { $regex: /^SP\d{3}$/ }, // Match SP prefix with 3 digits
+          }
+        },
+        {
+          $project: {
+            numericId: { 
+              $toInt: { $substr: ["$serviceProviderId", 2, 3] } // Extract the numeric part
+            }
+          }
+        },
+        { $sort: { numericId: -1 } },
+        { $limit: 1 }
+      ]);
+      
+      if (highestIdRecord && highestIdRecord.length > 0 && highestIdRecord[0].numericId) {
+        nextNumber = highestIdRecord[0].numericId + 1;
+      }
+      
+      // Also check deleted providers that might have been completely removed from the system
+      // by looking at services that reference providers that no longer exist
+      const servicesWithDeletedProviders = await Service.find({
+        serviceProviderId: { $regex: /^SP\d{3}$/ }
+      }).sort({ serviceProviderId: -1 });
+      
+      if (servicesWithDeletedProviders && servicesWithDeletedProviders.length > 0) {
+        for (const service of servicesWithDeletedProviders) {
+          if (service.serviceProviderId) {
+            const providerIdNum = parseInt(service.serviceProviderId.replace('SP', ''), 10);
+            if (!isNaN(providerIdNum) && providerIdNum >= nextNumber) {
+              nextNumber = providerIdNum + 1;
+              console.log(`🔍 Found higher ID from deleted provider's service: SP${providerIdNum} → new next ID: SP${nextNumber}`);
+            }
+          }
+        }
+      }
     }
     
-    // FIXED: Use SP prefix (not SPR) to match User model validation
+    // Generate new ID with SP prefix followed by 3-digit number
     const newId = `SP${nextNumber.toString().padStart(3, '0')}`;
     console.log('✅ Generated new Provider ID:', newId);
     return newId;
@@ -119,5 +160,69 @@ export const getExistingServiceProviderId = async (userId) => {
   } catch (error) {
     console.error('Error getting existing service provider ID:', error);
     return null;
+  }
+};
+
+// Function to check for duplicate service provider IDs and fix them
+export const checkAndFixDuplicateServiceProviderIds = async () => {
+  try {
+    console.log('🔍 Checking for duplicate service provider IDs...');
+    
+    // Find all service providers with IDs
+    const serviceProviders = await User.find({
+      role: 'serviceProvider',
+      serviceProviderId: { $exists: true, $ne: null, $ne: '' }
+    }).sort({ createdAt: 1 }); // Sort by creation date ascending
+    
+    if (!serviceProviders.length) {
+      console.log('✅ No service providers with IDs found');
+      return { checked: true, fixed: 0 };
+    }
+    
+    console.log(`🔍 Found ${serviceProviders.length} service providers with IDs`);
+    
+    // Track used IDs to detect duplicates
+    const usedIds = new Map();
+    let fixCount = 0;
+    
+    for (const provider of serviceProviders) {
+      const currentId = provider.serviceProviderId;
+      
+      // If this ID is already used by another provider, assign a new one
+      if (usedIds.has(currentId)) {
+        console.log(`⚠️ Found duplicate ID ${currentId} for provider ${provider._id}`);
+        
+        // Generate a new unique ID
+        const newId = await generateServiceProviderSerial();
+        
+        console.log(`🔄 Reassigning provider ${provider._id} from ${currentId} to ${newId}`);
+        
+        // Update the provider with the new ID
+        provider.serviceProviderId = newId;
+        await provider.save();
+        
+        // Also update any services using this provider ID
+        const updatedServices = await Service.updateMany(
+          { serviceProvider: provider._id },
+          { serviceProviderId: newId }
+        );
+        
+        console.log(`🔄 Updated ${updatedServices.modifiedCount} services with new provider ID`);
+        fixCount++;
+      }
+      
+      // Track this ID as used
+      usedIds.set(currentId, provider._id);
+    }
+    
+    return { 
+      checked: true, 
+      total: serviceProviders.length,
+      fixed: fixCount 
+    };
+    
+  } catch (error) {
+    console.error('❌ Error checking duplicate service provider IDs:', error);
+    return { checked: false, error: error.message };
   }
 };

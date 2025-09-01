@@ -20,7 +20,7 @@ import {
 import crypto from 'crypto';
 import Service from '../models/Service.js';
 import Booking from '../models/Booking.js';
-import { createNotification } from './notificationController.js';
+import { createNotification, notifyNewCustomerRegistration } from './notificationController.js';
 
 // Import BOTH functions from serial generator
 import { generateServiceProviderSerial } from '../Utils/serialGenerator.js';
@@ -239,6 +239,19 @@ export const register = async (req, res) => {
       message = 'Admin account created successfully';
     }
 
+    // Notify admin of new customer registration - FIXED TO PREVENT DUPLICATE NOTIFICATIONS
+    if (role === 'customer') {
+      try {
+        // Import the function from the correct controller
+        const { notifyNewCustomerRegistration } = await import('./notificationController.js');
+        await notifyNewCustomerRegistration(savedUser);
+        console.log('✅ Admin notification sent for new customer registration');
+      } catch (error) {
+        console.error('❌ Failed to notify admin of new customer registration:', error);
+        // Continue with registration even if notification fails
+      }
+    }
+
     res.status(201).json({
       success: true,
       message,
@@ -251,10 +264,6 @@ export const register = async (req, res) => {
         isActive: savedUser.isActive
       }
     });
-    // Emit real-time notification: new customer registration
-    if (role === 'customer') {
-      await notifyNewCustomerRegistration(savedUser);
-    }
 
   } catch (error) {
     console.error('❌ Registration error:', error);
@@ -941,6 +950,8 @@ export const approveServiceProviderUpdate = async (req, res) => {
           svc.availabilityStatus = 'No Longer Available';
           svc.deletedAt = new Date();
           svc.deletedBy = req.user.userId;
+          svc.isPublished = false; // Ensure it's not published
+          svc.isVisible = false;   // Make sure it's not visible to customers
           await svc.save();
           
           // Send individual service notifications to affected customers
@@ -2243,6 +2254,9 @@ export const getDashboardData = async (req, res) => {
       newProvidersDataPoints: newProvidersData.length,
       serviceUpdateRequests,
       appointmentsDataPoints: appointmentsPerDayData.length
+
+
+
     });
 
     return res.json({
