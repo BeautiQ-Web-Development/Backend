@@ -1,4 +1,5 @@
 import Notification from '../models/Notification.js';
+import mailer from './mailer.js';
 
 // In-memory notification storage (replace with database in production)
 let notifications = [];
@@ -56,3 +57,45 @@ export const addServiceNotification = (serviceData, action = 'created') => {
     read: false
   });
 };
+
+export function notifyNewCustomerRegistration(customerData) {
+  try {
+    const adminEmail = process.env.ADMIN_EMAIL || 'admin@example.com';
+    const subject = 'New Customer Registration';
+    const message = `
+A new customer has registered:
+---------------------------
+Name: ${customerData.fullName || customerData.name || 'Not provided'}
+Email: ${customerData.emailAddress || customerData.email || 'Not provided'}
+Phone: ${customerData.mobileNumber || 'Not provided'}
+Address: ${customerData.currentAddress || 'Not provided'}
+NIC: ${customerData.nicNumber || 'Not provided'}
+---------------------------
+`;
+    
+    // Use the sendServiceNotificationToAdmin from mailer
+    return mailer.sendServiceNotificationToAdmin({
+      subject: subject,
+      text: message,
+      html: `<div style="font-family: Arial, sans-serif; padding: 20px;">
+        <h2>New Customer Registration</h2>
+        <p><strong>Name:</strong> ${customerData.fullName || customerData.name || 'Not provided'}</p>
+        <p><strong>Email:</strong> ${customerData.emailAddress || customerData.email || 'Not provided'}</p>
+        <p><strong>Phone:</strong> ${customerData.mobileNumber || 'Not provided'}</p>
+        <p><strong>Address:</strong> ${customerData.currentAddress || 'Not provided'}</p>
+        <p><strong>NIC:</strong> ${customerData.nicNumber || 'Not provided'}</p>
+      </div>`
+    }).then(info => {
+      console.log('✅ New customer registration notification sent to admin');
+      return info;
+    }).catch(error => {
+      console.error('❌ Error sending registration notification:', error);
+      // Don't throw the error - we don't want to block registration
+      return null;
+    });
+  } catch (error) {
+    console.error('❌ Error in notifyNewCustomerRegistration:', error);
+    // Don't throw the error - we don't want to block registration
+    return Promise.resolve(null);
+  }
+}
