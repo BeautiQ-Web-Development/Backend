@@ -252,6 +252,18 @@ export const register = async (req, res) => {
       }
     }
 
+    // Notify admin of new service provider registration
+    if (role === 'serviceProvider') {
+      try {
+        const { notifyNewServiceProviderRegistration } = await import('./notificationController.js');
+        await notifyNewServiceProviderRegistration(savedUser);
+        console.log('✅ Admin notification sent for new service provider registration');
+      } catch (error) {
+        console.error('❌ Failed to notify admin of new service provider registration:', error);
+        // Continue with registration even if notification fails
+      }
+    }
+
     res.status(201).json({
       success: true,
       message,
@@ -565,6 +577,16 @@ export const requestServiceProviderUpdate = async (req, res) => {
       });
       // Don't fail the request if email fails, but log it
     }
+
+    // Send in-app notification to admin
+    try {
+      const { notifyServiceProviderUpdateRequest } = await import('./notificationController.js');
+      await notifyServiceProviderUpdateRequest(savedProvider, updateData);
+      console.log('✅ Admin in-app notification sent for service provider update request');
+    } catch (notifError) {
+      console.error('❌ Failed to send in-app notification:', notifError);
+      // Don't fail the request if notification fails
+    }
     
     res.status(200).json({
       success: true,
@@ -682,6 +704,16 @@ export const requestServiceProviderDeletion = async (req, res) => {
         businessName: savedProvider.businessName
       });
       // Don't fail the request if email fails, but log it
+    }
+
+    // Send in-app notification to admin
+    try {
+      const { notifyServiceProviderDeleteRequest } = await import('./notificationController.js');
+      await notifyServiceProviderDeleteRequest(savedProvider, reason.trim());
+      console.log('✅ Admin in-app notification sent for service provider deletion request');
+    } catch (notifError) {
+      console.error('❌ Failed to send in-app notification:', notifError);
+      // Don't fail the request if notification fails
     }
     
     res.status(200).json({

@@ -306,3 +306,107 @@ export const notifyCustomerDeleted = async (customer, reason) => {
     });
   }
 };
+
+// Notify admin(s) about new service provider registration
+export const notifyNewServiceProviderRegistration = async (serviceProvider) => {
+  try {
+    const adminUsers = await User.find({ role: 'admin' }).select('_id');
+    
+    for (const admin of adminUsers) {
+      await createNotification({
+        sender: 'system',
+        receiver: admin._id.toString(),
+        message: `New service provider registered: ${serviceProvider.businessName || serviceProvider.fullName}`,
+        type: 'newServiceProvider',
+        data: {
+          providerId: serviceProvider._id,
+          providerName: serviceProvider.fullName,
+          businessName: serviceProvider.businessName,
+          providerEmail: serviceProvider.emailAddress,
+          city: serviceProvider.city,
+          businessType: serviceProvider.businessType
+        }
+      });
+    }
+    console.log('✅ Admin notified of new service provider registration');
+  } catch (error) {
+    console.error('❌ Failed to notify admin of service provider registration:', error);
+  }
+};
+
+// Notify admin(s) about service provider profile update request
+export const notifyServiceProviderUpdateRequest = async (serviceProvider, updateFields) => {
+  try {
+    const adminUsers = await User.find({ role: 'admin' }).select('_id');
+    
+    for (const admin of adminUsers) {
+      await createNotification({
+        sender: serviceProvider._id.toString(),
+        receiver: admin._id.toString(),
+        message: `${serviceProvider.businessName || serviceProvider.fullName} requested to update their profile`,
+        type: 'serviceProviderUpdateRequest',
+        data: {
+          providerId: serviceProvider._id,
+          providerName: serviceProvider.fullName,
+          businessName: serviceProvider.businessName,
+          updateFields: Object.keys(updateFields),
+          requestedAt: new Date()
+        }
+      });
+    }
+    console.log('✅ Admin notified of service provider update request');
+  } catch (error) {
+    console.error('❌ Failed to notify admin of service provider update request:', error);
+  }
+};
+
+// Notify admin(s) about service provider password change request
+export const notifyServiceProviderPasswordRequest = async (serviceProvider) => {
+  try {
+    const adminUsers = await User.find({ role: 'admin' }).select('_id');
+    
+    for (const admin of adminUsers) {
+      await createNotification({
+        sender: serviceProvider._id.toString(),
+        receiver: admin._id.toString(),
+        message: `${serviceProvider.businessName || serviceProvider.fullName} requested to change their password`,
+        type: 'serviceProviderPasswordRequest',
+        data: {
+          providerId: serviceProvider._id,
+          providerName: serviceProvider.fullName,
+          businessName: serviceProvider.businessName,
+          requestedAt: new Date()
+        }
+      });
+    }
+    console.log('✅ Admin notified of service provider password change request');
+  } catch (error) {
+    console.error('❌ Failed to notify admin of service provider password request:', error);
+  }
+};
+
+// Notify admin(s) about service provider account deletion request
+export const notifyServiceProviderDeleteRequest = async (serviceProvider, reason) => {
+  try {
+    const adminUsers = await User.find({ role: 'admin' }).select('_id');
+    
+    for (const admin of adminUsers) {
+      await createNotification({
+        sender: serviceProvider._id.toString(),
+        receiver: admin._id.toString(),
+        message: `${serviceProvider.businessName || serviceProvider.fullName} requested to delete their account`,
+        type: 'serviceProviderDeleteRequest',
+        data: {
+          providerId: serviceProvider._id,
+          providerName: serviceProvider.fullName,
+          businessName: serviceProvider.businessName,
+          reason: reason || 'Not specified',
+          requestedAt: new Date()
+        }
+      });
+    }
+    console.log('✅ Admin notified of service provider deletion request');
+  } catch (error) {
+    console.error('❌ Failed to notify admin of service provider deletion request:', error);
+  }
+};
