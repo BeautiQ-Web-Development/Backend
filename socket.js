@@ -58,11 +58,51 @@ export const initializeSocket = (server) => {
       
       console.log(`👤 User ${userId} registered with socket ${socket.id}`);
       console.log(`📊 Total connected users: ${Object.keys(connectedUsers).length}`);
+      
+      // Broadcast user online status to others
+      socket.broadcast.emit('userOnline', { userId });
+    });
+
+    // Chat: Send a message
+    socket.on('sendMessage', async (data) => {
+      const { receiverId, message, senderId, senderName } = data;
+      
+      console.log(`💬 Message from ${senderId} to ${receiverId}`);
+      
+      // Emit to receiver
+      io.to(receiverId).emit('receiveMessage', {
+        senderId,
+        senderName,
+        message,
+        timestamp: new Date()
+      });
+    });
+
+    // Chat: Typing indicator
+    socket.on('typing', (data) => {
+      const { receiverId, senderId, senderName, isTyping } = data;
+      
+      io.to(receiverId).emit('userTyping', {
+        senderId,
+        senderName,
+        isTyping
+      });
+    });
+
+    // Chat: Mark messages as read
+    socket.on('messagesRead', (data) => {
+      const { senderId, receiverId } = data;
+      
+      io.to(senderId).emit('messagesReadConfirmation', {
+        readBy: receiverId
+      });
     });
 
     // Handle client disconnect
     socket.on('disconnect', () => {
       console.log(`🔴 Socket disconnected: ${socket.id}`);
+      
+      let disconnectedUserId = null;
       
       // Remove socket from user connections
       for (const [userId, sockets] of Object.entries(connectedUsers)) {
@@ -73,10 +113,16 @@ export const initializeSocket = (server) => {
           // Clean up empty user entries
           if (sockets.size === 0) {
             delete connectedUsers[userId];
+            disconnectedUserId = userId;
             console.log(`🧹 Removed empty user entry for ${userId}`);
           }
           break;
         }
+      }
+      
+      // Broadcast user offline status
+      if (disconnectedUserId) {
+        socket.broadcast.emit('userOffline', { userId: disconnectedUserId });
       }
       
       console.log(`📊 Remaining connected users: ${Object.keys(connectedUsers).length}`);

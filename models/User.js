@@ -225,6 +225,16 @@ const userSchema = new Schema({
   resetPasswordToken: String,
   resetPasswordExpire: Date,
 
+  // Online status and chat fields
+  isOnline: {
+    type: Boolean,
+    default: false
+  },
+  lastSeen: {
+    type: Date,
+    default: Date.now
+  },
+
   // Resignation request
   resignationRequest: resignationRequestSchema,
   

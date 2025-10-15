@@ -265,6 +265,9 @@ app.use('/api/notifications', notificationRoutes);
 app.use('/api/payments', paymentRoutes);
 // Booking routes
 app.use('/api/bookings', bookingRoutes);
+// Chat routes
+import chatRoutes from './routes/chat.Routes.js';
+app.use('/api/chat', chatRoutes);
 
 // Admin image viewing route
 app.get('/api/admin/images/:type/:id/:field', rbac(['admin']), async (req, res) => {

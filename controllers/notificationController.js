@@ -323,6 +323,7 @@ export const notifyNewServiceProviderRegistration = async (serviceProvider) => {
           providerName: serviceProvider.fullName,
           businessName: serviceProvider.businessName,
           providerEmail: serviceProvider.emailAddress,
+          mobileNumber: serviceProvider.mobileNumber,
           city: serviceProvider.city,
           businessType: serviceProvider.businessType
         }

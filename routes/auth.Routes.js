@@ -6,7 +6,9 @@ import { protect, authorize } from '../middleware/authMiddleware.js';
 import {
   register,
   login,
+  logout,
   verifyToken,
+  checkAdminExists,
   getProfile,
   updateProfile,
   requestAccountDeletion,
@@ -65,6 +67,9 @@ const uploadFields = upload.fields([
   { name: 'certificatesPhotos', maxCount: 5 }
 ]);
 
+// PUBLIC ROUTE: Check if admin exists (for system initialization check)
+router.get('/check-admin-exists', checkAdminExists);
+
 // REGISTRATION ROUTES
 router.post('/register-customer', register);
 router.post('/register-admin', register);
@@ -72,6 +77,7 @@ router.post('/register-service-provider', uploadFields, register);
 
 // AUTHENTICATION ROUTES
 router.post('/login', login);
+router.post('/logout', protect, logout);
 router.get('/verify-token', verifyToken);
 
 // PASSWORD RESET ROUTES

@@ -96,14 +96,26 @@ export const register = async (req, res) => {
     console.log('👤 Role:', role);
     console.log('📧 Email:', emailAddress);
 
-    // For admin registration, check if admin already exists
+    // CRITICAL: Check admin existence based on role
+    const existingAdmin = await User.findOne({ role: 'admin' });
+    
     if (role === 'admin') {
-      const existingAdmin = await User.findOne({ role: 'admin' });
+      // For admin registration, check if admin already exists
       if (existingAdmin) {
-        return res.status(400).json({
+        return res.status(403).json({
           success: false,
           message: 'Admin account already exists. Only one admin is allowed.',
+          code: 'ADMIN_ALREADY_EXISTS',
           adminExists: true
+        });
+      }
+    } else {
+      // For customer and service provider registration, admin MUST exist first
+      if (!existingAdmin) {
+        return res.status(403).json({
+          success: false,
+          message: 'System setup incomplete. An administrator account must be created first before other users can register.',
+          code: 'NO_ADMIN_EXISTS'
         });
       }
     }
@@ -353,6 +365,11 @@ export const login = async (req, res) => {
       }
     }
 
+    // Update user's online status
+    user.isOnline = true;
+    user.lastSeen = new Date();
+    await user.save();
+
     // Generate JWT token
     const token = jwt.sign(
       { 
@@ -444,6 +461,25 @@ export const verifyToken = async (req, res) => {
     res.status(401).json({
       success: false,
       message: 'Invalid token'
+    });
+  }
+};
+
+// Check if admin exists in the system (public endpoint)
+export const checkAdminExists = async (req, res) => {
+  try {
+    const adminExists = await User.findOne({ role: 'admin' });
+    
+    return res.status(200).json({
+      success: true,
+      adminExists: !!adminExists,
+      systemInitialized: !!adminExists
+    });
+  } catch (error) {
+    console.error('Error checking admin existence:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Error checking system status'
     });
   }
 };
@@ -2331,6 +2367,47 @@ export const getDashboardData = async (req, res) => {
       success: false, 
       message: 'Server error while fetching dashboard data',
       error: err.message 
+    });
+  }
+};
+
+// Logout endpoint to update online status
+export const logout = async (req, res) => {
+  try {
+    const userId = req.user?.id;
+    
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        message: 'User not authenticated'
+      });
+    }
+
+    // Update user's online status
+    const user = await User.findById(userId);
+    if (user) {
+      user.isOnline = false;
+      user.lastSeen = new Date();
+      await user.save();
+      
+      console.log('👋 User logged out:', {
+        id: user._id,
+        email: user.emailAddress,
+        role: user.role
+      });
+    }
+
+    res.json({
+      success: true,
+      message: 'Logged out successfully'
+    });
+
+  } catch (error) {
+    console.error('❌ Logout error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Logout failed',
+      error: error.message
     });
   }
 };
