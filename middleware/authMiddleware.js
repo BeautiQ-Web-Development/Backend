@@ -52,6 +52,14 @@ export const protect = async (req, res, next) => {
       });
     }
 
+    // Validate token format before verification
+    if (!token || token === 'null' || token === 'undefined' || token.trim() === '') {
+      return res.status(401).json({
+        success: false,
+        message: 'Access denied. Invalid token format.'
+      });
+    }
+
     // Verify token
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     
