@@ -38,7 +38,7 @@ router.get('/stats', async (req, res) => {
 // Specific limiter for available slots API to prevent the 429 errors
 const availableSlotsRateLimiter = expressRateLimit({
   windowMs: 60 * 1000, // 1 minute
-  max: 5, // Limit each IP to 5 requests per minute
+  max: 30, // Limit each IP to 30 requests per minute (increased for reschedule scenarios)
   standardHeaders: true,
   legacyHeaders: false,
   message: 'Too many slot requests, please try again after 1 minute'

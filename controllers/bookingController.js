@@ -70,7 +70,7 @@ export const getBookingById = async (req, res) => {
       ...booking.toObject(),
       customerName: customer ? `${customer.firstName} ${customer.lastName}` : 'Unknown Customer',
       customerEmail: customer ? customer.emailAddress : '',
-      providerName: provider ? `${provider.firstName} ${provider.lastName}` : 'Unknown Provider',
+      providerName: provider ? provider.fullName : 'Unknown Provider',
       providerEmail: provider ? provider.emailAddress : '',
       serviceName: service ? service.name : booking.serviceName || 'Unknown Service'
     };
@@ -334,12 +334,10 @@ export const getCustomerBookings = async (req, res) => {
       filteredBookings.map(async (booking) => {
         const provider = await User.findById(booking.serviceProviderId);
         const service = await Service.findById(booking.serviceId);
-        
-        // If booking already has providerName, use it, otherwise get it from provider
         const bookingObj = booking.toObject();
         return {
           ...bookingObj,
-          providerName: bookingObj.providerName || (provider ? `${provider.firstName} ${provider.lastName}` : 'Unknown Provider'),
+          providerName: bookingObj.providerName || (provider ? provider.fullName : 'Unknown Provider'),
           providerEmail: bookingObj.providerEmail || (provider ? provider.emailAddress : ''),
           serviceName: service ? service.name : booking.serviceName || 'Unknown Service'
         };
@@ -361,7 +359,7 @@ export const getCustomerBookings = async (req, res) => {
 export const getAvailableSlots = async (req, res) => {
   try {
     const { serviceId } = req.params;
-    const { date } = req.query; // YYYY-MM-DD
+    const { date, bookingId } = req.query; // YYYY-MM-DD and optional bookingId for reschedule
 
     const service = await Service.findById(serviceId);
     if (!service) return res.status(404).json({ 
@@ -390,11 +388,18 @@ export const getAvailableSlots = async (req, res) => {
     genSlots(afterStart, afterEnd);
 
     // Fetch all non-cancelled bookings on that day to prevent double bookings
-    const booked = await Booking.find({
+    const bookingFilter = {
       serviceId,
       bookingDate: { $gte: new Date(`${date}T00:00:00`), $lt: new Date(`${date}T23:59:59`) },
-      status: { $nin: ['cancelled'] } // Include all bookings except cancelled ones
-    });
+      status: { $nin: ['cancelled'] }
+    };
+    
+    // Exclude current booking when rescheduling
+    if (bookingId) {
+      bookingFilter._id = { $ne: bookingId };
+    }
+    
+    const booked = await Booking.find(bookingFilter);
 
     // Filter out overlaps
     const available = slots.filter(slot => {
@@ -468,6 +473,17 @@ export const rescheduleBooking = async (req, res) => {
     const bookingDate = new Date(date);
     const dateString = bookingDate.toISOString().split('T')[0]; // YYYY-MM-DD
     
+    // Extract time string for conflict checking
+    let timeStringToCheck;
+    if (slot.includes('T')) {
+      // slot is full ISO datetime
+      const tempDate = new Date(slot);
+      timeStringToCheck = tempDate.toTimeString().substring(0, 5);
+    } else {
+      // slot is already time string "HH:mm"
+      timeStringToCheck = slot;
+    }
+    
     // Find if the slot is already booked (excluding the current booking)
     const existingBooking = await Booking.findOne({
       serviceId: booking.serviceId,
@@ -475,7 +491,7 @@ export const rescheduleBooking = async (req, res) => {
         $gte: new Date(`${dateString}T00:00:00.000Z`),
         $lt: new Date(`${dateString}T23:59:59.999Z`)
       },
-      bookingTime: slot,
+      bookingTime: timeStringToCheck,
       status: { $nin: ['cancelled'] },
       _id: { $ne: bookingId } // Exclude the current booking
     });
@@ -490,13 +506,24 @@ export const rescheduleBooking = async (req, res) => {
     
     // Update the booking
     booking.bookingDate = bookingDate;
-    booking.bookingTime = slot;
     
-    // Auto-generate start and end times
-    const [hours, minutes] = slot.split(':').map(Number);
-    booking.start = new Date(bookingDate);
-    booking.start.setHours(hours, minutes, 0, 0);
-    booking.end = new Date(booking.start.getTime() + booking.duration * 60000);
+    // Handle both ISO datetime format and HH:mm time string format
+    let startDateTime;
+    if (slot.includes('T')) {
+      // slot is full ISO datetime (e.g., "2025-10-15T09:00:00.000Z")
+      startDateTime = new Date(slot);
+    } else {
+      // slot is time string "HH:mm" (e.g., "09:00")
+      const [hours, minutes] = slot.split(':').map(Number);
+      startDateTime = new Date(bookingDate);
+      startDateTime.setHours(hours, minutes, 0, 0);
+    }
+    
+    // Extract time string in HH:mm format
+    const timeString = startDateTime.toTimeString().substring(0, 5);
+    booking.bookingTime = timeString;
+    booking.start = startDateTime;
+    booking.end = new Date(startDateTime.getTime() + (booking.duration || 0) * 60000);
     
     // No need to update payment status since we're just rescheduling
     
