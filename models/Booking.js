@@ -67,8 +67,8 @@ const bookingSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['pending', 'confirmed', 'completed', 'cancelled'],
-    default: 'confirmed' // Changed default to match Appointment model
+    enum: ['pending', 'booked', 'confirmed', 'completed', 'cancelled', 'failed'],
+    default: 'pending'
   },
   location: {
     type: String,
@@ -142,6 +142,99 @@ bookingSchema.index({ serviceProviderId: 1 });
 bookingSchema.index({ serviceId: 1 });
 bookingSchema.index({ start: 1, end: 1 });
 bookingSchema.index({ status: 1 });
+bookingSchema.index({ paymentStatus: 1 });
+
+// CRITICAL: Composite index to prevent duplicate bookings
+// This ensures only ONE active booking per customer/service/date/time combination
+bookingSchema.index(
+  { 
+    customerId: 1, 
+    serviceId: 1, 
+    bookingDate: 1, 
+    bookingTime: 1,
+    status: 1 
+  },
+  { 
+    name: 'unique_booking_slot',
+    background: true
+  }
+);
+
+// Additional composite index for conflict detection
+bookingSchema.index(
+  { 
+    serviceId: 1, 
+    start: 1, 
+    end: 1,
+    status: 1
+  },
+  {
+    name: 'service_time_conflict',
+    background: true
+  }
+);
+
+// Index for cleanup queries (finding stale pending bookings)
+bookingSchema.index(
+  { 
+    status: 1, 
+    paymentStatus: 1, 
+    updatedAt: 1 
+  },
+  {
+    name: 'cleanup_stale_bookings',
+    background: true
+  }
+);
+
+// Static methods for common queries
+bookingSchema.statics.findActiveByCustomer = function(customerId) {
+  return this.find({ 
+    customerId,
+    status: { $in: ['booked', 'confirmed', 'completed'] }
+  }).sort({ bookingDate: -1, bookingTime: -1 });
+};
+
+bookingSchema.statics.findActiveByProvider = function(serviceProviderId) {
+  return this.find({ 
+    serviceProviderId,
+    status: { $in: ['booked', 'confirmed', 'completed'] }
+  }).sort({ bookingDate: -1, bookingTime: -1 });
+};
+
+bookingSchema.statics.findPendingBookings = function(olderThanMinutes = 20) {
+  const cutoffTime = new Date(Date.now() - olderThanMinutes * 60 * 1000);
+  return this.find({
+    status: 'pending',
+    paymentStatus: 'pending',
+    updatedAt: { $lt: cutoffTime }
+  });
+};
+
+bookingSchema.statics.findConflictingBookings = function(serviceId, start, end, excludeBookingId = null) {
+  const query = {
+    serviceId,
+    status: { $in: ['booked', 'confirmed', 'completed'] },
+    start: { $lt: end },
+    end: { $gt: start }
+  };
+  
+  if (excludeBookingId) {
+    query._id = { $ne: excludeBookingId };
+  }
+  
+  return this.find(query);
+};
+
+// Instance method to check if booking can be modified
+bookingSchema.methods.canBeModified = function() {
+  return ['pending', 'booked', 'confirmed'].includes(this.status);
+};
+
+// Instance method to check if booking is active
+bookingSchema.methods.isActive = function() {
+  return ['booked', 'confirmed', 'completed'].includes(this.status);
+};
 
 const Booking = mongoose.model('Booking', bookingSchema);
 

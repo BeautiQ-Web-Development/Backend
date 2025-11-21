@@ -1,28 +1,96 @@
 // controllers/bookingController.js
+import mongoose from 'mongoose';
 import Booking from '../models/Booking.js';
 import User from '../models/User.js';
 import Service from '../models/Service.js';
+
+const ACTIVE_BOOKING_STATUSES = ['pending', 'booked', 'confirmed', 'completed'];
+
+const parseTimeTuple = (timeString) => {
+  if (!timeString || typeof timeString !== 'string') {
+    return null;
+  }
+
+  const trimmed = timeString.trim();
+
+  if (/^\d{4}-\d{2}-\d{2}T/.test(trimmed)) {
+    const isoDate = new Date(trimmed);
+    if (!Number.isNaN(isoDate.getTime())) {
+      return [isoDate.getUTCHours(), isoDate.getUTCMinutes(), isoDate];
+    }
+  }
+
+  const timeMatch = trimmed.match(/^([0-1]?\d|2[0-3]):([0-5]\d)(?:\s*(AM|PM))?$/i);
+  if (!timeMatch) {
+    return null;
+  }
+
+  let hours = parseInt(timeMatch[1], 10);
+  const minutes = parseInt(timeMatch[2], 10);
+  const period = timeMatch[3]?.toUpperCase();
+
+  if (period) {
+    if (period === 'PM' && hours < 12) {
+      hours += 12;
+    }
+    if (period === 'AM' && hours === 12) {
+      hours = 0;
+    }
+  }
+
+  return [hours, minutes, null];
+};
+
+const normalizeBookingStatus = (status) => {
+  if (!status || typeof status !== 'string') {
+    return status;
+  }
+  const lowered = status.toLowerCase();
+  // Keep 'confirmed' as is, don't convert to 'booked'
+  return lowered;
+};
+
+const getUserDisplayName = (user, fallback = 'Unknown User') => {
+  if (!user) {
+    return fallback;
+  }
+  if (typeof user.fullName === 'string' && user.fullName.trim().length > 0) {
+    return user.fullName.trim();
+  }
+  const parts = [user.firstName, user.lastName].filter(Boolean).map((part) => part.trim());
+  const combined = parts.join(' ').trim();
+  return combined || fallback;
+};
+
+const mapBookingForResponse = (bookingDoc) => {
+  if (!bookingDoc) {
+    return null;
+  }
+  const bookingObj = bookingDoc.toObject ? bookingDoc.toObject() : { ...bookingDoc };
+  bookingObj.status = normalizeBookingStatus(bookingObj.status);
+  return bookingObj;
+};
 
 // Get all bookings for a service provider
 export const getProviderBookings = async (req, res) => {
   try {
     const providerId = req.user.userId;
     
-    // Find all bookings for this provider
+    // Find all bookings for this provider and populate customer details
     const bookings = await Booking.find({ serviceProviderId: providerId })
-      .sort({ bookingDate: -1, bookingTime: -1 });
+      .populate('customerId', 'firstName lastName') // Populate customer's name
+      .sort({ bookingDate: -1, start: -1 }); // Sort by date and time
     
-    // Get customer details for each booking
-    const bookingsWithDetails = await Promise.all(
-      bookings.map(async (booking) => {
-        const customer = await User.findById(booking.customerId);
-        
-        return {
-          ...booking.toObject(),
-          customerName: customer ? `${customer.firstName} ${customer.lastName}` : 'Unknown Customer'
-        };
-      })
-    );
+    // Map bookings to include customer's full name
+    const bookingsWithDetails = bookings.map((booking) => {
+      const bookingObj = mapBookingForResponse(booking);
+      const customer = booking.customerId; // Customer is now populated
+
+      return {
+        ...bookingObj,
+        customerName: customer ? `${customer.firstName} ${customer.lastName}`.trim() : 'Unknown Customer',
+      };
+    });
     
     res.status(200).json(bookingsWithDetails);
   } catch (error) {
@@ -40,7 +108,10 @@ export const getBookingById = async (req, res) => {
   try {
     const { bookingId } = req.params;
     
-    const booking = await Booking.findById(bookingId);
+    const booking = await Booking.findById(bookingId)
+      .populate('customerId', 'firstName lastName emailAddress')
+      .populate('serviceProviderId', 'firstName lastName emailAddress fullName')
+      .populate('serviceId', 'name');
     
     if (!booking) {
       return res.status(404).json({
@@ -61,14 +132,15 @@ export const getBookingById = async (req, res) => {
       });
     }
     
-    // Get customer, provider, and service details
-    const customer = await User.findById(booking.customerId);
-    const provider = await User.findById(booking.serviceProviderId);
-    const service = await Service.findById(booking.serviceId);
+    // Details are already populated
+    const customer = booking.customerId;
+    const provider = booking.serviceProviderId;
+    const service = booking.serviceId;
     
+    const baseBooking = mapBookingForResponse(booking);
     const bookingDetails = {
-      ...booking.toObject(),
-      customerName: customer ? `${customer.firstName} ${customer.lastName}` : 'Unknown Customer',
+      ...baseBooking,
+      customerName: customer ? `${customer.firstName} ${customer.lastName}`.trim() : 'Unknown Customer',
       customerEmail: customer ? customer.emailAddress : '',
       providerName: provider ? provider.fullName : 'Unknown Provider',
       providerEmail: provider ? provider.emailAddress : '',
@@ -93,9 +165,11 @@ export const getBookingById = async (req, res) => {
 export const updateBookingStatus = async (req, res) => {
   try {
     const { bookingId } = req.params;
-    const { status } = req.body;
-    
-    if (!['confirmed', 'completed', 'cancelled'].includes(status)) {
+    const rawStatus = typeof req.body.status === 'string' ? req.body.status.toLowerCase() : '';
+    const statusToApply = normalizeBookingStatus(rawStatus);
+    const allowedStatuses = ['confirmed', 'completed', 'cancelled']; // 'booked' is no longer a valid manual status
+
+    if (!allowedStatuses.includes(statusToApply)) {
       return res.status(400).json({
         success: false,
         message: 'Invalid status value'
@@ -122,12 +196,43 @@ export const updateBookingStatus = async (req, res) => {
       });
     }
     
-    booking.status = status;
+    const previousStatus = normalizeBookingStatus(booking.status);
+    booking.status = statusToApply;
     await booking.save();
+    
+    // If status is changed to 'completed', send feedback notification to customer
+    if (statusToApply === 'completed' && previousStatus !== 'completed') {
+      // Import notification controller
+      const { createNotification } = await import('./notificationController.js');
+      
+      // Get customer and service details
+      const customer = await User.findById(booking.customerId);
+      const service = await Service.findById(booking.serviceId);
+      const provider = await User.findById(booking.serviceProviderId);
+      
+      // Send feedback notification to customer
+      if (customer) {
+        await createNotification({
+          sender: booking.serviceProviderId,
+          receiver: booking.customerId,
+          message: `Your service "${service?.name || booking.serviceName}" with ${provider?.firstName || 'Provider'} ${provider?.lastName || ''} has been completed! Please share your feedback and rating.`,
+          type: 'feedback_request',
+          data: {
+            bookingId: booking._id,
+            serviceId: booking.serviceId,
+            serviceName: service?.name || booking.serviceName,
+            providerId: booking.serviceProviderId,
+            providerName: provider ? `${provider.firstName} ${provider.lastName}` : 'Provider',
+            bookingDate: booking.bookingDate,
+            bookingTime: booking.bookingTime
+          }
+        });
+      }
+    }
     
     res.status(200).json({
       success: true,
-      booking
+      booking: mapBookingForResponse(booking)
     });
   } catch (error) {
     console.error('Error updating booking status:', error);
@@ -148,49 +253,18 @@ export const createBooking = async (req, res) => {
       customerId,
       serviceProviderId,
       date,
-      slot,
-      totalPrice,
+      slot, // Expecting a time string like "HH:MM"
+      amount,
+      currency = 'usd',
       serviceLocation,
       address,
-      notes
     } = req.body;
 
     // Validate required fields
-    if (!serviceId || !customerId || !serviceProviderId || !date || !slot || !totalPrice) {
+    if (!serviceId || !customerId || !serviceProviderId || !date || !slot || !amount) {
       return res.status(400).json({
         success: false,
-        message: 'Missing required booking information'
-      });
-    }
-    
-    // Check if serviceLocation is provided when using home service
-    if (serviceLocation === 'home' && !address) {
-      return res.status(400).json({
-        success: false,
-        message: 'Address is required for home services'
-      });
-    }
-    
-    // Check if slot is already booked (double booking prevention)
-    const bookingDate = new Date(date);
-    const dateString = bookingDate.toISOString().split('T')[0]; // YYYY-MM-DD
-    
-    // First check if this time slot is already booked
-    const existingBooking = await Booking.findOne({
-      serviceId,
-      bookingDate: {
-        $gte: new Date(`${dateString}T00:00:00.000Z`),
-        $lt: new Date(`${dateString}T23:59:59.999Z`)
-      },
-      bookingTime: slot,
-      status: { $nin: ['cancelled'] }
-    });
-    
-    if (existingBooking) {
-      return res.status(409).json({
-        success: false,
-        message: 'This time slot has already been booked. Please select another time.',
-        isDoubleBooking: true
+        message: 'Missing required booking information',
       });
     }
 
@@ -199,109 +273,132 @@ export const createBooking = async (req, res) => {
     if (!service) {
       return res.status(404).json({
         success: false,
-        message: 'Service not found'
+        message: 'Service not found',
       });
     }
 
-    // Check if there's already a booking record for this customer, service, date and time
-    // This prevents duplicate bookings
-    let booking = await Booking.findOne({
-      customerId,
-      serviceId,
-      bookingDate: {
-        $gte: new Date(`${dateString}T00:00:00.000Z`),
-        $lt: new Date(`${dateString}T23:59:59.999Z`)
-      },
-      bookingTime: slot
-    });
+    // --- Working Hours Validation ---
+    const bookingDate = new Date(date);
+    const dayOfWeek = bookingDate.getUTCDay(); // Sunday = 0, Saturday = 6
+
+    if (dayOfWeek === 0) { // Sunday is a holiday
+      return res.status(400).json({
+        success: false,
+        message: 'Bookings are not available on Sundays.',
+      });
+    }
+
+    const timeParts = slot.match(/(\d+):(\d+)/);
+    if (!timeParts) {
+      return res.status(400).json({ success: false, message: 'Invalid time format.' });
+    }
     
-    if (booking) {
-      // If the booking exists but is cancelled, we can reuse it
-      if (booking.status === 'cancelled') {
-        booking.status = 'pending';
-        booking.paymentStatus = 'pending';
-        booking.totalPrice = totalPrice;
-        booking.location = serviceLocation || 'salon';
-        booking.address = address || null;
-        booking.notes = notes || '';
-        booking.updatedAt = new Date();
-      } else {
-        // If the booking exists and is not cancelled, return an error
-        return res.status(409).json({
-          success: false,
-          message: 'You already have a booking for this service on this date and time',
-          isDoubleBooking: true
-        });
+    const hours = parseInt(timeParts[1], 10);
+    const minutes = parseInt(timeParts[2], 10);
+
+    // Working hours: 9 AM to 6 PM (18:00)
+    if (hours < 9 || (hours >= 18 && minutes > 0)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Bookings are only available between 9:00 AM and 6:00 PM.',
+      });
+    }
+    // --- End of Working Hours Validation ---
+
+    // Combine date and time for startDateTime
+    const startDateTime = new Date(`${date}T${slot}:00.000Z`);
+    const duration = service.duration || 60;
+    const endDateTime = new Date(startDateTime.getTime() + duration * 60000);
+
+    // Check for conflicting bookings
+    // Use service.serviceProvider to ensure we check the correct provider's schedule
+    const normalizedProviderId = (() => {
+      if (service?.serviceProvider instanceof mongoose.Types.ObjectId) {
+        return service.serviceProvider;
       }
-    } else {
-      // Create a new booking record if none exists
-      booking = new Booking({
-        serviceId,
-        serviceProviderId,
-        customerId,
-        serviceType: service.type,
-        serviceName: service.name,
-        bookingDate: new Date(date),
-        bookingTime: slot,
-        totalPrice,
-        status: 'pending',
-        paymentStatus: 'pending',
-        location: serviceLocation || 'salon',
-        address: address || null,
-        notes: notes || ''
+      if (service?.serviceProvider && mongoose.Types.ObjectId.isValid(service.serviceProvider)) {
+        return new mongoose.Types.ObjectId(service.serviceProvider);
+      }
+      if (mongoose.Types.ObjectId.isValid(serviceProviderId)) {
+        return new mongoose.Types.ObjectId(serviceProviderId);
+      }
+      if (service?.serviceProviderId && mongoose.Types.ObjectId.isValid(service.serviceProviderId)) {
+        return new mongoose.Types.ObjectId(service.serviceProviderId);
+      }
+      return null;
+    })();
+
+    if (!normalizedProviderId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid service provider information for this service.'
       });
     }
 
-    await booking.save();
-    
-    // Get customer details for notification
-    const customer = await User.findById(customerId);
-    
-    // Send a notification to service provider
-    if (customer) {
-      const { createNotification } = await import('../controllers/notificationController.js');
-      await createNotification({
-        sender: customerId,
-        receiver: serviceProviderId,
-        message: `New booking received for ${service.name}`,
-        type: 'booking_confirmation',
-        data: {
-          bookingId: booking._id,
-          customerId: customerId,
-          customerName: customer.fullName,
-          customerIdNumber: customer.customerId || 'Unknown ID',
-          serviceName: service.name,
-          date: date,
-          time: slot
-        }
+    const conflictingBookings = await Booking.find({
+      serviceId: service._id,
+      status: { $in: ACTIVE_BOOKING_STATUSES },
+      start: { $lt: endDateTime },
+      end: { $gt: startDateTime }
+    });
+
+    if (conflictingBookings.length > 0) {
+      return res.status(409).json({
+        success: false,
+        message: 'This time slot is already booked. Please select another time.',
+        isDoubleBooking: true,
       });
     }
+
+    // Create a new booking with 'confirmed' status
+    const newBooking = new Booking({
+      serviceId,
+      serviceName,
+      customerId,
+      serviceProviderId: normalizedProviderId,
+      serviceType: service.type,
+      bookingDate: new Date(date),
+      bookingTime: slot,
+      start: startDateTime,
+      end: endDateTime,
+      duration,
+      totalPrice: amount,
+      status: 'confirmed', // Set status to 'confirmed'
+      paymentStatus: 'paid',
+      location: serviceLocation,
+      address,
+    });
+
+    await newBooking.save();
 
     res.status(201).json({
       success: true,
-      booking
+      booking: mapBookingForResponse(newBooking),
     });
   } catch (error) {
     console.error('Error creating booking:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to create booking',
-      error: error.message
+      error: error.message,
     });
   }
 };
 
-// Get all bookings for a customer
+// Get all bookings for the current user (customer)
 export const getCustomerBookings = async (req, res) => {
   try {
-    const customerId = req.user.userId;
-    
-    // Only get bookings that are pending, confirmed, or completed (exclude cancelled)
-    // This ensures we don't show duplicate bookings if some were cancelled
-    const bookings = await Booking.find({ 
-      customerId,
-      status: { $in: ['pending', 'confirmed', 'completed'] }
-    }).sort({ bookingDate: -1, bookingTime: -1 });
+    const userId = req.user.userId;
+    const userRole = req.user.role;
+
+    // Only get bookings that are pending, booked, or completed (exclude cancelled)
+    const query = {
+      ...(userRole === 'admin' ? {} : { customerId: userId }),
+      status: { $in: ['booked', 'confirmed', 'completed'] },
+    };
+
+    const bookings = await Booking.find(query)
+      .sort({ bookingDate: -1, bookingTime: -1 });
     
     // Group bookings by serviceId, bookingDate and bookingTime to detect duplicates
     const bookingGroups = {};
@@ -314,17 +411,19 @@ export const getCustomerBookings = async (req, res) => {
     });
     
     // For each group, keep only the booking with the "highest" status
-    // Priority: confirmed > completed > pending
+    // Priority: booked/confirmed > completed > pending
     const statusPriority = {
+      'booked': 3,
       'confirmed': 3,
       'completed': 2, 
       'pending': 1
     };
+    const getPriority = (status) => statusPriority[normalizeBookingStatus(status)] || 0;
     
     const filteredBookings = [];
     Object.values(bookingGroups).forEach(group => {
       // Sort by status priority (highest first)
-      group.sort((a, b) => statusPriority[b.status] - statusPriority[a.status]);
+      group.sort((a, b) => getPriority(b.status) - getPriority(a.status));
       // Keep only the first (highest priority) booking
       filteredBookings.push(group[0]);
     });
@@ -334,7 +433,7 @@ export const getCustomerBookings = async (req, res) => {
       filteredBookings.map(async (booking) => {
         const provider = await User.findById(booking.serviceProviderId);
         const service = await Service.findById(booking.serviceId);
-        const bookingObj = booking.toObject();
+        const bookingObj = mapBookingForResponse(booking);
         return {
           ...bookingObj,
           providerName: bookingObj.providerName || (provider ? provider.fullName : 'Unknown Provider'),
@@ -355,81 +454,139 @@ export const getCustomerBookings = async (req, res) => {
   }
 };
 
-// Added from appointmentController - Get available time slots for a service
+// Get available time slots for a given service and date
 export const getAvailableSlots = async (req, res) => {
   try {
-    const { serviceId } = req.params;
-    const { date, bookingId } = req.query; // YYYY-MM-DD and optional bookingId for reschedule
+    const { serviceId } = req.params; // Correctly get serviceId from params
+    const { date, bookingId } = req.query;
+
+    if (!serviceId || !date) {
+      return res.status(400).json({
+        success: false,
+        message: 'Service ID and date are required.',
+      });
+    }
 
     const service = await Service.findById(serviceId);
-    if (!service) return res.status(404).json({ 
-      success: false, 
-      message: 'Service not found' 
-    });
-
-    const duration = service.duration; // minutes
-
-    // Define working windows
-    const morningStart = new Date(`${date}T09:00:00`);
-    const morningEnd   = new Date(`${date}T12:00:00`);
-    const afterStart   = new Date(`${date}T14:30:00`);
-    const afterEnd     = new Date(`${date}T17:30:00`);
-
-    // Generate candidate slots
-    const slots = [];
-    const genSlots = (start, end) => {
-      let cur = new Date(start);
-      while (new Date(cur.getTime() + duration*60000) <= end) {
-        slots.push(new Date(cur));
-        cur = new Date(cur.getTime() + duration*60000);
-      }
-    };
-    genSlots(morningStart, morningEnd);
-    genSlots(afterStart, afterEnd);
-
-    // Fetch all non-cancelled bookings on that day to prevent double bookings
-    const bookingFilter = {
-      serviceId,
-      bookingDate: { $gte: new Date(`${date}T00:00:00`), $lt: new Date(`${date}T23:59:59`) },
-      status: { $nin: ['cancelled'] }
-    };
-    
-    // Exclude current booking when rescheduling
-    if (bookingId) {
-      bookingFilter._id = { $ne: bookingId };
-    }
-    
-    const booked = await Booking.find(bookingFilter);
-
-    // Filter out overlaps
-    const available = slots.filter(slot => {
-      const slotTimeStr = `${slot.getHours().toString().padStart(2, '0')}:${slot.getMinutes().toString().padStart(2, '0')}`;
-      const endSlot = new Date(slot.getTime() + duration*60000);
-      
-      // Check if this slot is already booked
-      const isSlotBooked = booked.some(booking => {
-        // If exact time match
-        if (booking.bookingTime === slotTimeStr) return true;
-        
-        // Or if there's an overlap
-        const bookingStartTime = booking.start;
-        const bookingEndTime = booking.end;
-        return (slot < bookingEndTime && endSlot > bookingStartTime);
+    if (!service) {
+      return res.status(404).json({
+        success: false,
+        message: 'Service not found.',
       });
-      
-      return !isSlotBooked;
+    }
+
+    const duration = service.duration || 60; // Default to 60 minutes
+    const requestedDate = new Date(`${date}T00:00:00.000Z`); // Treat date as UTC
+    const dayOfWeek = requestedDate.getUTCDay();
+
+    // --- Working Hours and Holiday Validation ---
+    if (dayOfWeek === 0) { // Sunday is a holiday
+      return res.status(200).json({
+        success: true,
+        availableSlots: [],
+        message: 'Bookings are not available on Sundays.',
+      });
+    }
+
+    // Working hours: 9 AM to 6 PM
+    const workDayStartHour = 9;
+    const workDayEndHour = 18;
+
+    // Find all confirmed/completed bookings for that day for the specific service provider
+    const dayStart = new Date(`${date}T00:00:00.000Z`);
+    const dayEnd = new Date(`${date}T23:59:59.999Z`);
+
+    const existingBookings = await Booking.find({
+      serviceId: service._id,
+      status: { $in: ACTIVE_BOOKING_STATUSES },
+      start: { $lt: dayEnd },
+      end: { $gt: dayStart }
     });
 
-    res.json({ 
-      success: true,
-      available: available.map(d => d.toISOString()) 
+    const bookingFilter = (booking) => {
+      if (!booking) {
+        return false;
+      }
+      if (bookingId && booking._id && booking._id.toString() === bookingId) {
+        return false; // exclude current booking when rescheduling
+      }
+      return true;
+    };
+
+    const trackedBookings = existingBookings.filter(bookingFilter);
+
+    const toMinutesFromTuple = (tuple) => {
+      if (!tuple) {
+        return null;
+      }
+      const [hours, minutes, isoDate] = tuple;
+      if (isoDate instanceof Date && !Number.isNaN(isoDate.getTime())) {
+        return isoDate.getHours() * 60 + isoDate.getMinutes();
+      }
+      if (typeof hours === 'number' && typeof minutes === 'number') {
+        return (hours * 60) + minutes;
+      }
+      return null;
+    };
+
+    const computeBookingInterval = (booking) => {
+      const tuple = parseTimeTuple(booking?.bookingTime);
+      let startMinutes = toMinutesFromTuple(tuple);
+
+      if (startMinutes === null && booking?.start) {
+        const startDate = new Date(booking.start);
+        if (!Number.isNaN(startDate.getTime())) {
+          startMinutes = (startDate.getHours() * 60) + startDate.getMinutes();
+        }
+      }
+
+      if (startMinutes === null) {
+        return null;
+      }
+
+      const bookingDuration = Number.isFinite(Number(booking?.duration)) && Number(booking?.duration) > 0
+        ? Number(booking.duration)
+        : duration;
+
+      return {
+        start: startMinutes,
+        end: startMinutes + bookingDuration
+      };
+    };
+
+    const blockedIntervals = trackedBookings
+      .map(computeBookingInterval)
+      .filter((interval) => interval && interval.end > interval.start);
+
+    const workDayStartMinutes = workDayStartHour * 60;
+    const workDayEndMinutes = workDayEndHour * 60;
+
+    const candidateSlots = [];
+    for (let slotStartMinutes = workDayStartMinutes; slotStartMinutes + duration <= workDayEndMinutes; slotStartMinutes += duration) {
+      const slotEndMinutes = slotStartMinutes + duration;
+      const overlaps = blockedIntervals.some(({ start, end }) => slotStartMinutes < end && slotEndMinutes > start);
+
+      if (!overlaps) {
+        candidateSlots.push(slotStartMinutes);
+      }
+    }
+
+    const formattedSlots = candidateSlots.map((minutes) => {
+      const hoursComponent = Math.floor(minutes / 60).toString().padStart(2, '0');
+      const minutesComponent = (minutes % 60).toString().padStart(2, '0');
+      return `${hoursComponent}:${minutesComponent}`;
     });
-  } catch (err) {
-    console.error('Error getting available slots:', err);
-    res.status(500).json({ 
+
+    res.status(200).json({
+      success: true,
+      availableSlots: formattedSlots,
+    });
+  } catch (error) {
+    console.error('Error fetching available slots:', error);
+    res.status(500).json({
       success: false,
-      message: 'Failed to get available slots',
-      error: err.message
+      message: 'Failed to fetch available slots.',
+      error: error.message,
     });
   }
 };
@@ -473,30 +630,66 @@ export const rescheduleBooking = async (req, res) => {
     const bookingDate = new Date(date);
     const dateString = bookingDate.toISOString().split('T')[0]; // YYYY-MM-DD
     
-    // Extract time string for conflict checking
-    let timeStringToCheck;
+    // Handle both ISO datetime format and HH:mm time string format for slot start
+    let newSlotStart;
     if (slot.includes('T')) {
-      // slot is full ISO datetime
-      const tempDate = new Date(slot);
-      timeStringToCheck = tempDate.toTimeString().substring(0, 5);
+      // slot is full ISO datetime (e.g., "2025-10-15T09:00:00.000Z")
+      newSlotStart = new Date(slot);
     } else {
-      // slot is already time string "HH:mm"
-      timeStringToCheck = slot;
+      // slot is time string "HH:mm" (e.g., "09:00")
+      const parsedSlot = parseTimeTuple(slot);
+      if (!parsedSlot) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid time slot format'
+        });
+      }
+      const [hours, minutes] = parsedSlot;
+      newSlotStart = new Date(bookingDate);
+      newSlotStart.setHours(hours ?? 0, minutes ?? 0, 0, 0);
     }
     
-    // Find if the slot is already booked (excluding the current booking)
-    const existingBooking = await Booking.findOne({
-      serviceId: booking.serviceId,
-      bookingDate: {
-        $gte: new Date(`${dateString}T00:00:00.000Z`),
-        $lt: new Date(`${dateString}T23:59:59.999Z`)
-      },
-      bookingTime: timeStringToCheck,
-      status: { $nin: ['cancelled'] },
+    const duration = Number(booking.duration) || 60;
+    const newSlotEnd = new Date(newSlotStart.getTime() + duration * 60000);
+    
+    // Check for overlapping bookings (excluding the current booking)
+    const dayBookings = await Booking.find({
+      serviceProviderId: booking.serviceProviderId, // Check bookings for the provider
+      status: { $nin: ['cancelled', 'failed'] },
+      start: { $lt: new Date(`${dateString}T23:59:59.999Z`) },
+      end: { $gt: new Date(`${dateString}T00:00:00.000Z`) },
       _id: { $ne: bookingId } // Exclude the current booking
     });
     
-    if (existingBooking) {
+    const hasConflict = dayBookings.some((existing) => {
+      const existingStart = existing.start ? new Date(existing.start) : (() => {
+        const fallback = new Date(existing.bookingDate);
+        const existingParsed = parseTimeTuple(existing.bookingTime);
+        if (existingParsed) {
+          const [hours, minutes] = existingParsed;
+          fallback.setHours(hours ?? 0, minutes ?? 0, 0, 0);
+        }
+        return fallback;
+      })();
+
+      if (Number.isNaN(existingStart.getTime())) {
+        return false;
+      }
+
+      const existingDuration = Number(existing.duration) || duration;
+      const existingEnd = existing.end
+        ? new Date(existing.end)
+        : new Date(existingStart.getTime() + existingDuration * 60000);
+
+      if (Number.isNaN(existingEnd.getTime())) {
+        return false;
+      }
+
+      // Check for overlap: (start < otherEnd) && (end > otherStart)
+      return newSlotStart < existingEnd && newSlotEnd > existingStart;
+    });
+    
+    if (hasConflict) {
       return res.status(409).json({
         success: false,
         message: 'This time slot has already been booked. Please select another time.',
@@ -504,26 +697,11 @@ export const rescheduleBooking = async (req, res) => {
       });
     }
     
-    // Update the booking
+    // Update the booking with the new date and time
     booking.bookingDate = bookingDate;
-    
-    // Handle both ISO datetime format and HH:mm time string format
-    let startDateTime;
-    if (slot.includes('T')) {
-      // slot is full ISO datetime (e.g., "2025-10-15T09:00:00.000Z")
-      startDateTime = new Date(slot);
-    } else {
-      // slot is time string "HH:mm" (e.g., "09:00")
-      const [hours, minutes] = slot.split(':').map(Number);
-      startDateTime = new Date(bookingDate);
-      startDateTime.setHours(hours, minutes, 0, 0);
-    }
-    
-    // Extract time string in HH:mm format
-    const timeString = startDateTime.toTimeString().substring(0, 5);
-    booking.bookingTime = timeString;
-    booking.start = startDateTime;
-    booking.end = new Date(startDateTime.getTime() + (booking.duration || 0) * 60000);
+    booking.bookingTime = `${newSlotStart.getHours().toString().padStart(2, '0')}:${newSlotStart.getMinutes().toString().padStart(2, '0')}`;
+    booking.start = newSlotStart;
+    booking.end = newSlotEnd;
     
     // No need to update payment status since we're just rescheduling
     
