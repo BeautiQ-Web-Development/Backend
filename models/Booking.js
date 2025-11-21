@@ -70,6 +70,9 @@ const bookingSchema = new mongoose.Schema({
     enum: ['pending', 'booked', 'confirmed', 'completed', 'cancelled', 'failed'],
     default: 'pending'
   },
+  confirmedAt: {
+    type: Date
+  },
   location: {
     type: String,
     enum: ['home', 'salon', 'studio'],

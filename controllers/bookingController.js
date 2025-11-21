@@ -76,19 +76,59 @@ export const getProviderBookings = async (req, res) => {
   try {
     const providerId = req.user.userId;
     
-    // Find all bookings for this provider and populate customer details
+    // Find all bookings for this provider
+    // We do NOT populate customerId directly to avoid losing the ID if the user is deleted
     const bookings = await Booking.find({ serviceProviderId: providerId })
-      .populate('customerId', 'firstName lastName') // Populate customer's name
-      .sort({ bookingDate: -1, start: -1 }); // Sort by date and time
+      .sort({ bookingDate: -1, start: -1 });
     
+    // Collect all customer IDs
+    const customerIds = [...new Set(bookings.map(b => b.customerId).filter(Boolean))];
+    
+    // Fetch customer details manually
+    const customers = await User.find({ _id: { $in: customerIds } })
+      .select('fullName emailAddress customerId firstName lastName');
+    
+    const customerMap = customers.reduce((acc, customer) => {
+      acc[customer._id.toString()] = customer;
+      return acc;
+    }, {});
+
     // Map bookings to include customer's full name
     const bookingsWithDetails = bookings.map((booking) => {
       const bookingObj = mapBookingForResponse(booking);
-      const customer = booking.customerId; // Customer is now populated
+      const customerIdStr = booking.customerId ? booking.customerId.toString() : null;
+      const customer = customerIdStr ? customerMap[customerIdStr] : null;
+      
+      // Prioritize populated customer name, fallback to stored name unless it's invalid
+      let customerName = getUserDisplayName(customer, null);
+      if (!customerName) {
+        customerName = bookingObj.customerName;
+      }
+      // Robust check for "undefined undefined" or similar artifacts
+      if (!customerName || /undefined\s+undefined/i.test(customerName) || customerName.trim() === 'undefined') {
+        customerName = 'Unknown Customer';
+      }
+
+      const customerEmail = (customer && customer.emailAddress) 
+        ? customer.emailAddress 
+        : (bookingObj.customerEmail || '');
+        
+      const customerAccountId = customer?.customerId || bookingObj.customerAccountId || null;
+      // Always use the booking's customerId if available, even if user not found
+      const customerUserId = customerIdStr || 
+        (typeof bookingObj.customerId === 'string' ? bookingObj.customerId : bookingObj.customerId?._id?.toString?.()) ||
+        null;
+        
+      const status = normalizeBookingStatus(bookingObj.status);
+      const confirmedAt = bookingObj.confirmedAt || booking.confirmedAt || (status === 'confirmed' ? booking.updatedAt : null);
 
       return {
         ...bookingObj,
-        customerName: customer ? `${customer.firstName} ${customer.lastName}`.trim() : 'Unknown Customer',
+        customerName,
+        customerEmail,
+        customerAccountId,
+        customerUserId,
+        confirmedAt,
       };
     });
     
@@ -108,9 +148,8 @@ export const getBookingById = async (req, res) => {
   try {
     const { bookingId } = req.params;
     
+    // Do NOT populate customerId/serviceProviderId to preserve IDs if users are deleted
     const booking = await Booking.findById(bookingId)
-      .populate('customerId', 'firstName lastName emailAddress')
-      .populate('serviceProviderId', 'firstName lastName emailAddress fullName')
       .populate('serviceId', 'name');
     
     if (!booking) {
@@ -119,6 +158,12 @@ export const getBookingById = async (req, res) => {
         message: 'Booking not found'
       });
     }
+    
+    // Fetch customer and provider manually
+    const [customer, provider] = await Promise.all([
+      User.findById(booking.customerId).select('fullName emailAddress customerId firstName lastName'),
+      User.findById(booking.serviceProviderId).select('fullName emailAddress customerId firstName lastName')
+    ]);
     
     // Check if the booking belongs to the current user
     if (
@@ -132,19 +177,23 @@ export const getBookingById = async (req, res) => {
       });
     }
     
-    // Details are already populated
-    const customer = booking.customerId;
-    const provider = booking.serviceProviderId;
-    const service = booking.serviceId;
-    
     const baseBooking = mapBookingForResponse(booking);
+    const status = normalizeBookingStatus(baseBooking.status);
+    
+    const storedCustomerName = (baseBooking.customerName && !/undefined\s+undefined/i.test(baseBooking.customerName)) 
+      ? baseBooking.customerName 
+      : 'Unknown Customer';
+      
     const bookingDetails = {
       ...baseBooking,
-      customerName: customer ? `${customer.firstName} ${customer.lastName}`.trim() : 'Unknown Customer',
-      customerEmail: customer ? customer.emailAddress : '',
-      providerName: provider ? provider.fullName : 'Unknown Provider',
-      providerEmail: provider ? provider.emailAddress : '',
-      serviceName: service ? service.name : booking.serviceName || 'Unknown Service'
+      customerName: getUserDisplayName(customer, storedCustomerName),
+      customerEmail: customer?.emailAddress || baseBooking.customerEmail || '',
+      customerAccountId: customer?.customerId || baseBooking.customerAccountId || null,
+      customerUserId: booking.customerId.toString(), // Always use the ID from booking
+      providerName: getUserDisplayName(provider, 'Unknown Provider'),
+      providerEmail: provider?.emailAddress || baseBooking.providerEmail || '',
+      serviceName: booking.serviceId ? booking.serviceId.name : booking.serviceName || 'Unknown Service',
+      confirmedAt: baseBooking.confirmedAt || booking.confirmedAt || (status === 'confirmed' ? booking.updatedAt : null),
     };
     
     res.status(200).json({
@@ -198,6 +247,10 @@ export const updateBookingStatus = async (req, res) => {
     
     const previousStatus = normalizeBookingStatus(booking.status);
     booking.status = statusToApply;
+
+    if (statusToApply === 'confirmed' && previousStatus !== 'confirmed') {
+      booking.confirmedAt = new Date();
+    }
     await booking.save();
     
     // If status is changed to 'completed', send feedback notification to customer
@@ -209,20 +262,21 @@ export const updateBookingStatus = async (req, res) => {
       const customer = await User.findById(booking.customerId);
       const service = await Service.findById(booking.serviceId);
       const provider = await User.findById(booking.serviceProviderId);
+      const providerDisplayName = getUserDisplayName(provider, 'Provider');
       
       // Send feedback notification to customer
       if (customer) {
         await createNotification({
           sender: booking.serviceProviderId,
           receiver: booking.customerId,
-          message: `Your service "${service?.name || booking.serviceName}" with ${provider?.firstName || 'Provider'} ${provider?.lastName || ''} has been completed! Please share your feedback and rating.`,
+          message: `Your service "${service?.name || booking.serviceName}" with ${providerDisplayName} has been completed! Please share your feedback and rating.`,
           type: 'feedback_request',
           data: {
             bookingId: booking._id,
             serviceId: booking.serviceId,
             serviceName: service?.name || booking.serviceName,
             providerId: booking.serviceProviderId,
-            providerName: provider ? `${provider.firstName} ${provider.lastName}` : 'Provider',
+            providerName: providerDisplayName,
             bookingDate: booking.bookingDate,
             bookingTime: booking.bookingTime
           }
@@ -350,6 +404,14 @@ export const createBooking = async (req, res) => {
       });
     }
 
+    const [customerUser, providerUser] = await Promise.all([
+      User.findById(customerId),
+      User.findById(normalizedProviderId),
+    ]);
+
+    const customerDisplayName = getUserDisplayName(customerUser, 'Unknown Customer');
+    const providerDisplayName = getUserDisplayName(providerUser, 'Unknown Provider');
+
     // Create a new booking with 'confirmed' status
     const newBooking = new Booking({
       serviceId,
@@ -367,6 +429,11 @@ export const createBooking = async (req, res) => {
       paymentStatus: 'paid',
       location: serviceLocation,
       address,
+      customerName: customerDisplayName,
+      customerEmail: customerUser?.emailAddress,
+      providerName: providerDisplayName,
+      providerEmail: providerUser?.emailAddress,
+      confirmedAt: new Date(),
     });
 
     await newBooking.save();
