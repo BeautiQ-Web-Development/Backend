@@ -92,8 +92,11 @@ export const protect = async (req, res, next) => {
       });
     }
 
+    const normalizedId = user._id.toString();
     req.user = {
-      userId: user._id.toString(),
+      userId: normalizedId,
+      id: normalizedId,
+      _id: normalizedId,
       role: user.role,
       approved: user.approved || user.approvalStatus === 'approved',
       isActive: user.isActive

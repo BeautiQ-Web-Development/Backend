@@ -1133,11 +1133,11 @@ export const approveServiceChanges = async (req, res) => {
       
       console.log('🔍 Looking up bookings with providerId:', providerId);
       
-      // Fetch all pending or confirmed bookings for this provider
+      // Fetch all pending or booked bookings for this provider
       // FIXED: Only look up by serviceProviderId to ensure we find ALL affected bookings
       const bookings = await Booking.find({
         serviceProviderId: providerId,
-        status: { $in: ['pending', 'confirmed'] }
+        status: { $in: ['pending', 'booked', 'confirmed'] }
       });
       
       console.log(`🔍 Found ${bookings.length} active bookings for provider ${providerId}. Details:`, 

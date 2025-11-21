@@ -159,6 +159,15 @@ export const register = async (req, res) => {
     if (mobileNumber) userData.mobileNumber = mobileNumber;
     if (nicNumber) userData.nicNumber = nicNumber;
 
+    // Handle profile photo upload for ALL user types (customer, admin, serviceProvider)
+    // This ensures every user can have a profile image from registration
+    if (req.files && req.files.profilePhoto && req.files.profilePhoto[0]) {
+      // Store the S3 URL of the profile photo
+      // multer-s3 automatically uploads to S3 and provides the URL in 'location'
+      userData.profilePhoto = req.files.profilePhoto[0].location;
+      console.log(`✅ Profile photo uploaded to S3 for ${role}:`, userData.profilePhoto);
+    }
+
     // Add service provider specific fields
     if (role === 'serviceProvider') {
       // Parse services if they exist
@@ -213,19 +222,25 @@ export const register = async (req, res) => {
       userData.policies = parsedPolicies;
       userData.approvalStatus = 'pending';
 
-      // Handle file uploads safely
+      // Handle additional file uploads for service providers (NIC and certificates)
+      // Profile photo is already handled above for all user types
+      // req.files now contains S3 file objects with 'location' property (the S3 URL)
       if (req.files) {
-        if (req.files.profilePhoto && req.files.profilePhoto[0]) {
-          userData.profilePhoto = req.files.profilePhoto[0].filename;
-        }
+        // If NIC front photo was uploaded, store its S3 URL
         if (req.files.nicFrontPhoto && req.files.nicFrontPhoto[0]) {
-          userData.nicFrontPhoto = req.files.nicFrontPhoto[0].filename;
+          userData.nicFrontPhoto = req.files.nicFrontPhoto[0].location;
+          console.log('✅ NIC front photo uploaded to S3:', userData.nicFrontPhoto);
         }
+        // If NIC back photo was uploaded, store its S3 URL
         if (req.files.nicBackPhoto && req.files.nicBackPhoto[0]) {
-          userData.nicBackPhoto = req.files.nicBackPhoto[0].filename;
+          userData.nicBackPhoto = req.files.nicBackPhoto[0].location;
+          console.log('✅ NIC back photo uploaded to S3:', userData.nicBackPhoto);
         }
+        // If certificates were uploaded, store their S3 URLs as an array
         if (req.files.certificatesPhotos && req.files.certificatesPhotos.length > 0) {
-          userData.certificatesPhotos = req.files.certificatesPhotos.map(file => file.filename);
+          // Map through all certificate files and extract their S3 URLs
+          userData.certificatesPhotos = req.files.certificatesPhotos.map(file => file.location);
+          console.log(`✅ ${userData.certificatesPhotos.length} certificate(s) uploaded to S3`);
         }
       }
 
@@ -400,7 +415,10 @@ export const login = async (req, res) => {
         role: user.role,
         approved: user.approved || user.approvalStatus === 'approved',
         approvalStatus: user.approvalStatus,
-        isActive: user.isActive
+        isActive: user.isActive,
+        profilePhoto: user.profilePhoto,
+        businessName: user.businessName, // For service providers
+        mobileNumber: user.mobileNumber
       }
     });
 
@@ -452,7 +470,10 @@ export const verifyToken = async (req, res) => {
         emailAddress: user.emailAddress,
         role: user.role,
         approved: user.approved,
-        isActive: user.isActive
+        isActive: user.isActive,
+        profilePhoto: user.profilePhoto,
+        businessName: user.businessName, // For service providers
+        mobileNumber: user.mobileNumber
       }
     });
 
@@ -2268,7 +2289,7 @@ export const getDashboardData = async (req, res) => {
       {
         $match: {
           createdAt: { $gte: thirtyDaysAgo },
-          status: { $in: ['pending', 'confirmed', 'completed'] }
+          status: { $in: ['pending', 'booked', 'confirmed', 'completed'] }
         }
       },
       {
@@ -2408,6 +2429,184 @@ export const logout = async (req, res) => {
       success: false,
       message: 'Logout failed',
       error: error.message
+    });
+  }
+};
+
+/**
+ * Update Profile Photo - For all user types (customer, admin, serviceProvider)
+ * This endpoint allows users to update their profile photo
+ * The photo is uploaded to S3 and the URL is stored in the database
+ * Old profile photo is deleted from S3 to save storage space
+ */
+export const updateProfilePhoto = async (req, res) => {
+  try {
+    // Extract user ID from the authenticated request
+    // req.user is set by the authentication middleware
+    const userId = req.user.userId;
+    
+    console.log('📸 Profile photo update request from user:', userId);
+    
+    // Check if a file was uploaded
+    // multer-s3 middleware puts the uploaded file info in req.file
+    if (!req.file) {
+      return res.status(400).json({
+        success: false,
+        message: 'No profile photo provided. Please upload an image file.'
+      });
+    }
+    
+    // Find the user in the database
+    const user = await User.findById(userId);
+    
+    // If user doesn't exist, return error
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+    
+    // Check if account is active
+    // Deactivated accounts should not be able to update their profile
+    if (user.isActive === false) {
+      return res.status(403).json({
+        success: false,
+        message: 'Cannot update profile photo for a deactivated account'
+      });
+    }
+    
+    // Store the old profile photo URL to delete it later
+    const oldProfilePhoto = user.profilePhoto;
+    
+    // Get the new S3 URL from the uploaded file
+    // multer-s3 stores the S3 URL in req.file.location
+    const newProfilePhotoUrl = req.file.location;
+    
+    // Update the user's profile photo URL in the database
+    user.profilePhoto = newProfilePhotoUrl;
+    user.updatedAt = new Date(); // Update the timestamp
+    
+    // Save the updated user to the database
+    await user.save();
+    
+    // Log success for debugging
+    console.log('✅ Profile photo updated successfully:', {
+      userId: user._id,
+      role: user.role,
+      newPhotoUrl: newProfilePhotoUrl
+    });
+    
+    // If there was an old profile photo, delete it from S3 to save storage space
+    if (oldProfilePhoto && oldProfilePhoto.includes('amazonaws.com')) {
+      try {
+        // Import the delete function from S3 config
+        const { deleteFromS3 } = await import('../config/s3.js');
+        // Delete the old photo from S3
+        await deleteFromS3(oldProfilePhoto);
+        console.log('🗑️ Old profile photo deleted from S3:', oldProfilePhoto);
+      } catch (deleteError) {
+        // If deletion fails, log the error but don't fail the request
+        // The new photo is already saved, so this is not critical
+        console.error('⚠️ Failed to delete old profile photo from S3:', deleteError);
+      }
+    }
+    
+    // Return success response with the new photo URL
+    res.status(200).json({
+      success: true,
+      message: 'Profile photo updated successfully',
+      data: {
+        profilePhoto: newProfilePhotoUrl
+      }
+    });
+    
+  } catch (error) {
+    // Log error for debugging
+    console.error('❌ Error updating profile photo:', error);
+    
+    // Return error response
+    res.status(500).json({
+      success: false,
+      message: 'Failed to update profile photo. Please try again.',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+export const adminUpdateProfile = async (req, res) => {
+  try {
+    const userId = req.user?.userId || req.user?.id || req.user?._id;
+    const { fullName, emailAddress, mobileNumber, currentAddress } = req.body;
+
+    console.log('🔧 Admin profile update requested', {
+      requestUser: req.user,
+      resolvedUserId: userId,
+      providedFields: Object.keys(req.body || {})
+    });
+
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        message: 'Authentication context missing for admin update'
+      });
+    }
+
+    // Find admin user
+    const admin = await User.findById(userId);
+    
+    if (!admin) {
+      return res.status(404).json({
+        success: false,
+        message: 'Admin not found'
+      });
+    }
+
+    // Verify user is admin
+    if (admin.role !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. Admin role required.'
+      });
+    }
+
+    // Check if account is deactivated
+    if (admin.isActive === false) {
+      return res.status(403).json({
+        success: false,
+        message: 'Cannot update deactivated account',
+        accountDeactivated: true
+      });
+    }
+
+    // Update only provided fields
+    if (fullName) admin.fullName = fullName.trim();
+    if (emailAddress) admin.emailAddress = emailAddress.trim();
+    if (mobileNumber) admin.mobileNumber = mobileNumber.trim();
+    if (currentAddress) admin.currentAddress = currentAddress.trim();
+
+    await admin.save();
+
+    res.json({
+      success: true,
+      message: 'Profile updated successfully',
+      user: {
+        id: admin._id,
+        fullName: admin.fullName,
+        emailAddress: admin.emailAddress,
+        mobileNumber: admin.mobileNumber,
+        currentAddress: admin.currentAddress,
+        role: admin.role,
+        updatedAt: admin.updatedAt
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Admin profile update error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to update admin profile',
+      error: process.env.NODE_ENV === 'development' ? error.message : 'Server error'
     });
   }
 };

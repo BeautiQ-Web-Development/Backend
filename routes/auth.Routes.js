@@ -1,8 +1,11 @@
 // routes/authRoutes.js - UPDATED WITH SERVICE PROVIDER REQUEST ROUTES
 import express from 'express';
-import multer from 'multer';
-import path from 'path';
 import { protect, authorize } from '../middleware/authMiddleware.js';
+import { 
+  uploadServiceProviderFiles, 
+  uploadCustomerFiles,
+  uploadAdminFiles
+} from '../middleware/uploadMiddleware.js';
 import {
   register,
   login,
@@ -28,52 +31,19 @@ import {
   rejectServiceProvider,
   getPendingServiceProviders,
   getApprovedServiceProviders,
-  getDashboardData
+  getDashboardData,
+  adminUpdateProfile
 } from '../controllers/authController.js';
 
 const router = express.Router();
-
-// Configure multer for file uploads
-const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    cb(null, 'uploads/serviceProviders/');
-  },
-  filename: function (req, file, cb) {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
-  }
-});
-
-const upload = multer({
-  storage: storage,
-  limits: {
-    fileSize: 10 * 1024 * 1024 // 10MB limit
-  },
-  fileFilter: function (req, file, cb) {
-    // Allow only image files
-    if (file.mimetype.startsWith('image/')) {
-      cb(null, true);
-    } else {
-      cb(new Error('Only image files are allowed'), false);
-    }
-  }
-});
-
-// Define upload fields for service provider registration
-const uploadFields = upload.fields([
-  { name: 'profilePhoto', maxCount: 1 },
-  { name: 'nicFrontPhoto', maxCount: 1 },
-  { name: 'nicBackPhoto', maxCount: 1 },
-  { name: 'certificatesPhotos', maxCount: 5 }
-]);
 
 // PUBLIC ROUTE: Check if admin exists (for system initialization check)
 router.get('/check-admin-exists', checkAdminExists);
 
 // REGISTRATION ROUTES
-router.post('/register-customer', register);
-router.post('/register-admin', register);
-router.post('/register-service-provider', uploadFields, register);
+router.post('/register-customer', uploadCustomerFiles, register);
+router.post('/register-admin', uploadAdminFiles, register);
+router.post('/register-service-provider', uploadServiceProviderFiles, register);
 
 // AUTHENTICATION ROUTES
 router.post('/login', login);
@@ -90,8 +60,12 @@ router.get('/approved-service-providers', getApprovedServiceProviders);
 // PROTECTED ROUTES (require authentication)
 router.use(protect); // All routes below require authentication
 
+// ADMIN PROFILE UPDATE (No approval needed)
+router.put('/admin/update-profile', authorize('admin'), adminUpdateProfile);
+
 // PROFILE ROUTES
 router.get('/profile', getProfile);
+
 
 // CUSTOMER PROFILE UPDATE ROUTES
 router.post('/update-profile', authorize('customer'), updateProfile);
@@ -126,6 +100,9 @@ router.get(
   authorize('admin'),
   getDashboardData
 );
+
+// // Admin profile update route - NO approval required
+// router.put('/admin/update-profile', rbac(['admin']), updateAdminProfile);
 
 // Error handling middleware for multer
 router.use((error, req, res, next) => {
