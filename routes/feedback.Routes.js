@@ -2,6 +2,7 @@
 
 import express from 'express';
 import {
+  createFeedback,
   getAllFeedbacks,
   getFeedbackStats,
   getFeedbackById,
@@ -12,6 +13,7 @@ import {
   deleteFeedback,
   getFeedbackTrends,
   initializeFeedbackController,
+  getAllProviderStats,
 } from '../controllers/feedbackController.js';
 import {
   validateFeedbackQuery,
@@ -35,6 +37,14 @@ router.use(logFeedbackAccess);
 /**
  * Public/General Routes
  */
+
+// Submit feedback
+// POST /api/feedback
+router.post(
+  '/',
+  rbac(['customer']),
+  createFeedback
+);
 
 // Get all feedbacks with filters
 // GET /api/feedback?sentiment=POSITIVE&rating=5&page=1&limit=10
@@ -119,6 +129,13 @@ router.delete(
   rbac(['admin']),
   validateObjectId('id'),
   deleteFeedback
+);
+
+// Get stats for all providers
+// GET /api/feedback/providers/stats
+router.get(
+  '/providers/stats',
+  getAllProviderStats
 );
 
 export default router;

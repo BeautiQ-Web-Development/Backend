@@ -6,7 +6,7 @@ import Payment from '../models/Payment.js';
 import stripe from 'stripe';
 import mongoose from 'mongoose';
 
-const ACTIVE_BOOKING_STATUSES = ['pending', 'booked', 'confirmed', 'completed'];
+const ACTIVE_BOOKING_STATUSES = ['booked', 'confirmed', 'completed'];
 
 // Initialize Stripe with your secret key
 const stripeClient = stripe(process.env.STRIPE_SECRET_KEY);

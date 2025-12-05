@@ -1015,6 +1015,49 @@ export const approveServiceProviderUpdate = async (req, res) => {
         deletionReason: serviceProvider.deletionReason
       });
       
+      // DELETE ALL S3 IMAGES ASSOCIATED WITH SERVICE PROVIDER
+      try {
+        const { deleteFromS3 } = await import('../config/s3.js');
+        let deletedCount = 0;
+        
+        // Delete profile photo
+        if (serviceProvider.profilePhoto && serviceProvider.profilePhoto.includes('amazonaws.com')) {
+          await deleteFromS3(serviceProvider.profilePhoto);
+          console.log('🗑️ Deleted profile photo from S3');
+          deletedCount++;
+        }
+        
+        // Delete NIC front photo
+        if (serviceProvider.nicFrontPhoto && serviceProvider.nicFrontPhoto.includes('amazonaws.com')) {
+          await deleteFromS3(serviceProvider.nicFrontPhoto);
+          console.log('🗑️ Deleted NIC front photo from S3');
+          deletedCount++;
+        }
+        
+        // Delete NIC back photo
+        if (serviceProvider.nicBackPhoto && serviceProvider.nicBackPhoto.includes('amazonaws.com')) {
+          await deleteFromS3(serviceProvider.nicBackPhoto);
+          console.log('🗑️ Deleted NIC back photo from S3');
+          deletedCount++;
+        }
+        
+        // Delete certificates photos
+        if (serviceProvider.certificatesPhotos && Array.isArray(serviceProvider.certificatesPhotos)) {
+          for (const certUrl of serviceProvider.certificatesPhotos) {
+            if (certUrl && certUrl.includes('amazonaws.com')) {
+              await deleteFromS3(certUrl);
+              deletedCount++;
+            }
+          }
+          console.log(`🗑️ Deleted ${serviceProvider.certificatesPhotos.length} certificate photo(s) from S3`);
+        }
+        
+        console.log(`✅ Successfully deleted ${deletedCount} image(s) from S3 for service provider ${serviceProvider.businessName}`);
+      } catch (s3Error) {
+        console.error('❌ Error deleting S3 images for service provider:', s3Error);
+        // Continue with deletion even if S3 cleanup fails
+      }
+      
       // Mark all services of provider as deleted and unavailable
       try {
         // Populate provider email for notifications
@@ -1403,6 +1446,31 @@ export const approveCustomerUpdate = async (req, res) => {
         deletedAt: customer.deletedAt,
         deletionReason: customer.deletionReason
       });
+      
+      // DELETE S3 IMAGES ASSOCIATED WITH CUSTOMER
+      try {
+        const { deleteFromS3 } = await import('../config/s3.js');
+        let deletedCount = 0;
+        
+        // Delete profile photo
+        if (customer.profilePhoto && customer.profilePhoto.includes('amazonaws.com')) {
+          await deleteFromS3(customer.profilePhoto);
+          console.log('🗑️ Deleted customer profile photo from S3');
+          deletedCount++;
+        }
+        
+        // Delete NIC photo if customer has one
+        if (customer.nicFrontPhoto && customer.nicFrontPhoto.includes('amazonaws.com')) {
+          await deleteFromS3(customer.nicFrontPhoto);
+          console.log('🗑️ Deleted customer NIC photo from S3');
+          deletedCount++;
+        }
+        
+        console.log(`✅ Successfully deleted ${deletedCount} image(s) from S3 for customer ${customer.fullName}`);
+      } catch (s3Error) {
+        console.error('❌ Error deleting S3 images for customer:', s3Error);
+        // Continue with deletion even if S3 cleanup fails
+      }
       
       // Send deletion approval email
       try {
@@ -2596,6 +2664,7 @@ export const adminUpdateProfile = async (req, res) => {
         emailAddress: admin.emailAddress,
         mobileNumber: admin.mobileNumber,
         currentAddress: admin.currentAddress,
+        profilePhoto: admin.profilePhoto, // Include profile photo in response
         role: admin.role,
         updatedAt: admin.updatedAt
       }

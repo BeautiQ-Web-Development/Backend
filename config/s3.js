@@ -20,6 +20,11 @@ const s3Client = new S3Client({
   }
 });
 
+// ⚠️ IMPORTANT: CORS Configuration Required
+// To allow your frontend (http://localhost:3000) to access S3 images, 
+// you MUST configure CORS on your S3 bucket.
+// See AWS_S3_CORS_SETUP.md for detailed instructions.
+
 // Export the S3 bucket name from environment variables
 // This is the name of your S3 bucket where all files will be stored
 export const S3_BUCKET_NAME = process.env.AWS_S3_BUCKET_NAME;
@@ -51,8 +56,14 @@ export const uploadToS3 = async (fileBuffer, fileName, mimeType, folder = '') =>
         Bucket: S3_BUCKET_NAME, // The S3 bucket name
         Key: s3Key, // The path/name of the file in S3
         Body: fileBuffer, // The actual file data
-        ContentType: mimeType // MIME type (helps browsers know how to handle the file)
+        ContentType: mimeType, // MIME type (helps browsers know how to handle the file)
         // Note: ACL removed - using bucket policy for public access instead
+        // To enable public access, configure:
+        // 1. S3 Bucket CORS (see AWS_S3_CORS_SETUP.md)
+        // 2. S3 Bucket Policy for public read access
+        // 3. Unblock public access in bucket settings
+        CacheControl: 'max-age=31536000', // Cache for 1 year
+        ContentDisposition: 'inline' // Display in browser instead of forcing download
       }
     });
     

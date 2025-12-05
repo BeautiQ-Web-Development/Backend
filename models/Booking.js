@@ -116,6 +116,10 @@ const bookingSchema = new mongoose.Schema({
   updatedAt: {
     type: Date,
     default: Date.now
+  },
+  reminderSent: {
+    type: Boolean,
+    default: false
   }
 });
 
