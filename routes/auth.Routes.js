@@ -4,7 +4,8 @@ import { protect, authorize } from '../middleware/authMiddleware.js';
 import { 
   uploadServiceProviderFiles, 
   uploadCustomerFiles,
-  uploadAdminFiles
+  uploadAdminFiles,
+  uploadSingleProfilePhoto
 } from '../middleware/uploadMiddleware.js';
 import {
   register,
@@ -32,7 +33,8 @@ import {
   getPendingServiceProviders,
   getApprovedServiceProviders,
   getDashboardData,
-  adminUpdateProfile
+  adminUpdateProfile,
+  updateProfilePhoto
 } from '../controllers/authController.js';
 
 const router = express.Router();
@@ -59,6 +61,9 @@ router.get('/approved-service-providers', getApprovedServiceProviders);
 
 // PROTECTED ROUTES (require authentication)
 router.use(protect); // All routes below require authentication
+
+// PROFILE PHOTO UPDATE ROUTE (All authenticated users)
+router.post('/update-profile-photo', uploadSingleProfilePhoto, updateProfilePhoto);
 
 // ADMIN PROFILE UPDATE (No approval needed)
 router.put('/admin/update-profile', authorize('admin'), adminUpdateProfile);

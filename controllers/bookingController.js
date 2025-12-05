@@ -4,7 +4,7 @@ import Booking from '../models/Booking.js';
 import User from '../models/User.js';
 import Service from '../models/Service.js';
 
-const ACTIVE_BOOKING_STATUSES = ['pending', 'booked', 'confirmed', 'completed'];
+const ACTIVE_BOOKING_STATUSES = ['booked', 'confirmed', 'completed'];
 
 const parseTimeTuple = (timeString) => {
   if (!timeString || typeof timeString !== 'string') {
@@ -50,7 +50,7 @@ const normalizeBookingStatus = (status) => {
   return lowered;
 };
 
-const getUserDisplayName = (user, fallback = 'Unknown User') => {
+export const getUserDisplayName = (user, fallback = 'Unknown User') => {
   if (!user) {
     return fallback;
   }
