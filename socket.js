@@ -3,6 +3,7 @@ import jwt from 'jsonwebtoken';
 
 // Keep track of connected users: userId -> Set of socket IDs
 const connectedUsers = {};
+let ioInstance;
 
 export const initializeSocket = (server) => {
   console.log('🔌 Initializing Socket.IO server...');
@@ -181,8 +182,11 @@ export const initializeSocket = (server) => {
   };
 
   console.log('✅ Socket.IO server initialized successfully');
+  ioInstance = io;
   return io;
 };
+
+export const getIo = () => ioInstance;
 
 export const getConnectedUsers = () => {
   return Object.keys(connectedUsers).map(userId => ({

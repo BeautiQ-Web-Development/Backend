@@ -1,13 +1,87 @@
 // controllers/feedbackController.js
 
 import { ObjectId } from 'mongodb';
+import Feedback from '../models/Feedback.js';
+import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
+import dotenv from 'dotenv';
 
-// This will be injected by the routes
-let feedbacksCollection;
+dotenv.config();
 
-// Initialize the collection reference
+const s3Client = new S3Client({
+  region: process.env.AWS_REGION,
+  credentials: {
+    accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
+  }
+});
+
+// Initialize the collection reference - DEPRECATED but kept for compatibility if needed
+// We will use Mongoose model 'Feedback' instead
 export const initializeFeedbackController = (collection) => {
-  feedbacksCollection = collection;
+  // feedbacksCollection = collection;
+};
+
+/**
+ * @desc    Submit new feedback
+ * @route   POST /api/feedback
+ * @access  Protected (Customer)
+ */
+export const createFeedback = async (req, res) => {
+  try {
+    const { 
+      bookingId, 
+      serviceId, 
+      providerId, 
+      rating, 
+      feedbackText,
+      serviceName,
+      providerName,
+      customerName
+    } = req.body;
+
+    const customerId = req.user.userId;
+
+    // Create feedback in MongoDB
+    const feedback = new Feedback({
+      bookingId,
+      customerId,
+      providerId,
+      serviceId,
+      rating,
+      feedbackText,
+      serviceName,
+      providerName,
+      customerName: customerName || req.user.fullName || 'Anonymous',
+      sentiment: 'NEUTRAL', // Default, can be updated by AI later
+      processedAt: new Date()
+    });
+
+    await feedback.save();
+
+    // Save to S3 for AI analysis
+    const s3Key = `feedbacks/${feedback._id}.json`;
+    const feedbackData = JSON.stringify(feedback.toObject(), null, 2);
+
+    await s3Client.send(new PutObjectCommand({
+      Bucket: process.env.AWS_S3_BUCKET_NAME,
+      Key: s3Key,
+      Body: feedbackData,
+      ContentType: 'application/json'
+    }));
+
+    res.status(201).json({
+      success: true,
+      message: 'Feedback submitted successfully',
+      data: feedback
+    });
+  } catch (error) {
+    console.error('❌ Error submitting feedback:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to submit feedback',
+      error: error.message
+    });
+  }
 };
 
 /**
@@ -48,10 +122,10 @@ export const getAllFeedbacks = async (req, res) => {
     if (startDate || endDate) {
       query.processedAt = {};
       if (startDate) {
-        query.processedAt.$gte = new Date(startDate).toISOString();
+        query.processedAt.$gte = new Date(startDate);
       }
       if (endDate) {
-        query.processedAt.$lte = new Date(endDate).toISOString();
+        query.processedAt.$lte = new Date(endDate);
       }
     }
 
@@ -65,15 +139,14 @@ export const getAllFeedbacks = async (req, res) => {
     sortOptions[sortBy] = sortOrder === 'asc' ? 1 : -1;
 
     // Get total count for pagination
-    const total = await feedbacksCollection.countDocuments(query);
+    const total = await Feedback.countDocuments(query);
 
     // Fetch feedbacks
-    const feedbacks = await feedbacksCollection
+    const feedbacks = await Feedback
       .find(query)
       .sort(sortOptions)
       .skip(skip)
-      .limit(limitNum)
-      .toArray();
+      .limit(limitNum);
 
     res.status(200).json({
       success: true,
@@ -113,40 +186,28 @@ export const getFeedbackStats = async (req, res) => {
       ratingDistribution,
     ] = await Promise.all([
       // Average rating
-      feedbacksCollection
-        .aggregate([
-          { $group: { _id: null, avgRating: { $avg: '$rating' } } },
-        ])
-        .toArray(),
+      Feedback.aggregate([
+        { $group: { _id: null, avgRating: { $avg: '$rating' } } },
+      ]),
 
       // Sentiment distribution
-      feedbacksCollection
-        .aggregate([
-          { $group: { _id: '$sentiment', count: { $sum: 1 } } },
-          { $sort: { count: -1 } },
-        ])
-        .toArray(),
+      Feedback.aggregate([
+        { $group: { _id: '$sentiment', count: { $sum: 1 } } },
+        { $sort: { count: -1 } },
+      ]),
 
-      // Top key phrases
-      feedbacksCollection
-        .aggregate([
-          { $unwind: '$keyPhrases' },
-          { $group: { _id: '$keyPhrases', count: { $sum: 1 } } },
-          { $sort: { count: -1 } },
-          { $limit: 10 },
-        ])
-        .toArray(),
+      // Top key phrases (placeholder if not implemented in schema yet)
+      // Assuming keyPhrases might be added later or we skip it for now
+      Promise.resolve([]),
 
       // Total feedback count
-      feedbacksCollection.countDocuments(),
+      Feedback.countDocuments(),
 
       // Rating distribution
-      feedbacksCollection
-        .aggregate([
-          { $group: { _id: '$rating', count: { $sum: 1 } } },
-          { $sort: { _id: 1 } },
-        ])
-        .toArray(),
+      Feedback.aggregate([
+        { $group: { _id: '$rating', count: { $sum: 1 } } },
+        { $sort: { _id: 1 } },
+      ]),
     ]);
 
     const avgRating = avgRatingResult[0]?.avgRating || 0;
@@ -188,9 +249,7 @@ export const getFeedbackById = async (req, res) => {
       });
     }
 
-    const feedback = await feedbacksCollection.findOne({
-      _id: new ObjectId(id),
-    });
+    const feedback = await Feedback.findById(id);
 
     if (!feedback) {
       return res.status(404).json({
@@ -222,10 +281,9 @@ export const getFeedbacksByBooking = async (req, res) => {
   try {
     const { bookingId } = req.params;
 
-    const feedbacks = await feedbacksCollection
+    const feedbacks = await Feedback
       .find({ bookingId })
-      .sort({ processedAt: -1 })
-      .toArray();
+      .sort({ processedAt: -1 });
 
     res.status(200).json({
       success: true,
@@ -251,10 +309,9 @@ export const getFeedbacksByCustomer = async (req, res) => {
   try {
     const { customerId } = req.params;
 
-    const feedbacks = await feedbacksCollection
+    const feedbacks = await Feedback
       .find({ customerId })
-      .sort({ processedAt: -1 })
-      .toArray();
+      .sort({ processedAt: -1 });
 
     // Calculate customer-specific stats
     const stats = {
@@ -293,16 +350,10 @@ export const getFeedbacksByProvider = async (req, res) => {
   try {
     const { providerId } = req.params;
 
-    // Find feedbacks by provider ID or provider name
-    const feedbacks = await feedbacksCollection
-      .find({
-        $or: [
-          { providerId },
-          { providerName: providerId },
-        ],
-      })
-      .sort({ processedAt: -1 })
-      .toArray();
+    // Find feedbacks by provider ID
+    const feedbacks = await Feedback
+      .find({ providerId })
+      .sort({ processedAt: -1 });
 
     // Calculate provider-specific stats
     const totalFeedbacks = feedbacks.length;
@@ -355,10 +406,9 @@ export const getFeedbacksByService = async (req, res) => {
   try {
     const { serviceName } = req.params;
 
-    const feedbacks = await feedbacksCollection
-      .find({ serviceName })
-      .sort({ processedAt: -1 })
-      .toArray();
+    const feedbacks = await Feedback
+      .find({ serviceName: { $regex: new RegExp(serviceName, 'i') } })
+      .sort({ processedAt: -1 });
 
     // Calculate service-specific stats
     const totalFeedbacks = feedbacks.length;
@@ -404,11 +454,9 @@ export const deleteFeedback = async (req, res) => {
       });
     }
 
-    const result = await feedbacksCollection.deleteOne({
-      _id: new ObjectId(id),
-    });
+    const result = await Feedback.findByIdAndDelete(id);
 
-    if (result.deletedCount === 0) {
+    if (!result) {
       return res.status(404).json({
         success: false,
         message: 'Feedback not found',
@@ -456,34 +504,32 @@ export const getFeedbackTrends = async (req, res) => {
         startDate = new Date(now.setDate(now.getDate() - 7));
     }
 
-    const trends = await feedbacksCollection
-      .aggregate([
-        {
-          $match: {
-            processedAt: { $gte: startDate.toISOString() },
-          },
+    const trends = await Feedback.aggregate([
+      {
+        $match: {
+          processedAt: { $gte: startDate },
         },
-        {
-          $group: {
-            _id: {
-              $dateToString: {
-                format: '%Y-%m-%d',
-                date: { $toDate: '$processedAt' },
-              },
-            },
-            count: { $sum: 1 },
-            avgRating: { $avg: '$rating' },
-            positiveSentiment: {
-              $sum: { $cond: [{ $eq: ['$sentiment', 'POSITIVE'] }, 1, 0] },
-            },
-            negativeSentiment: {
-              $sum: { $cond: [{ $eq: ['$sentiment', 'NEGATIVE'] }, 1, 0] },
+      },
+      {
+        $group: {
+          _id: {
+            $dateToString: {
+              format: '%Y-%m-%d',
+              date: '$processedAt',
             },
           },
+          count: { $sum: 1 },
+          avgRating: { $avg: '$rating' },
+          positiveSentiment: {
+            $sum: { $cond: [{ $eq: ['$sentiment', 'POSITIVE'] }, 1, 0] },
+          },
+          negativeSentiment: {
+            $sum: { $cond: [{ $eq: ['$sentiment', 'NEGATIVE'] }, 1, 0] },
+          },
         },
-        { $sort: { _id: 1 } },
-      ])
-      .toArray();
+      },
+      { $sort: { _id: 1 } },
+    ]);
 
     res.status(200).json({
       success: true,
@@ -503,6 +549,46 @@ export const getFeedbackTrends = async (req, res) => {
   }
 };
 
+/**
+ * @desc    Get statistics for all providers
+ * @route   GET /api/feedback/providers/stats
+ * @access  Public
+ */
+export const getAllProviderStats = async (req, res) => {
+  try {
+    const stats = await Feedback.aggregate([
+      {
+        $group: {
+          _id: '$providerId',
+          avgRating: { $avg: '$rating' },
+          totalFeedbacks: { $sum: 1 }
+        }
+      }
+    ]);
+
+    // Convert array to map for easier lookup
+    const statsMap = {};
+    stats.forEach(stat => {
+      statsMap[stat._id] = {
+        avgRating: parseFloat(stat.avgRating.toFixed(2)),
+        totalFeedbacks: stat.totalFeedbacks
+      };
+    });
+
+    res.status(200).json({
+      success: true,
+      data: statsMap
+    });
+  } catch (error) {
+    console.error('❌ Error fetching all provider stats:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch provider stats',
+      error: process.env.NODE_ENV === 'development' ? error.message : 'Server error',
+    });
+  }
+};
+
 export default {
   initializeFeedbackController,
   getAllFeedbacks,
@@ -514,4 +600,5 @@ export default {
   getFeedbacksByService,
   deleteFeedback,
   getFeedbackTrends,
+  getAllProviderStats,
 };

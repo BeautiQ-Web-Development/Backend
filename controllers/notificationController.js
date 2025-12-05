@@ -1,6 +1,6 @@
 import Notification from '../models/Notification.js';
 import User from '../models/User.js';
-import { getIo } from '../server.js'; // Make sure to export io from server.js
+import { getIo } from '../socket.js';
 
 // Create a new notification and emit via Socket.IO
 export const createNotification = async ({ sender, receiver, message, type, data = {} }) => {
