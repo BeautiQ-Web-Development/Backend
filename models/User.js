@@ -150,16 +150,19 @@ const userSchema = new Schema({
   // Account deletion (resignation) requests from customers
   resignationRequests: [resignationRequestSchema],
   
-  // Service Provider ID - only generated after approval
+  // Service Provider ID - generated at registration time
   serviceProviderId: {
     type: String,
     unique: true,
     sparse: true,
     validate: {
       validator: function(v) {
-        if (this.role === 'serviceProvider' && this.approvalStatus === 'approved') {
-          return v && v.match(/^SP\d{3}$/);
+        // Service providers can have serviceProviderId at any approval status
+        if (this.role === 'serviceProvider') {
+          // If value exists, it must match the format SP followed by 3 digits
+          return !v || v.match(/^SP\d{3}$/);
         }
+        // Non-service providers should not have serviceProviderId
         return !v;
       },
       message: 'Invalid service provider ID format or unauthorized provider ID assignment'

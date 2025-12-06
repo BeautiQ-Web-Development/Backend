@@ -117,7 +117,7 @@ router.get('/approved', async (req, res) => {
     }
     
     const services = await Service.find(filter)
-      .populate('serviceProvider', 'businessName fullName location averageRating reviewCount isOnline')
+      .populate('serviceProvider', 'businessName fullName location averageRating reviewCount isOnline profilePhoto serviceProviderId')
       .sort({ createdAt: -1 })
       .limit(limit * 1)
       .skip((page - 1) * limit);
