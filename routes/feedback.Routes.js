@@ -14,6 +14,7 @@ import {
   getFeedbackTrends,
   initializeFeedbackController,
   getAllProviderStats,
+  getAllServiceStats,
 } from '../controllers/feedbackController.js';
 import {
   validateFeedbackQuery,
@@ -136,6 +137,13 @@ router.delete(
 router.get(
   '/providers/stats',
   getAllProviderStats
+);
+
+// Get stats for all services (for customer dashboard)
+// GET /api/feedback/services/stats
+router.get(
+  '/services/stats',
+  getAllServiceStats
 );
 
 export default router;

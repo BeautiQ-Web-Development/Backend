@@ -62,6 +62,6 @@ const FeedbackSchema = new mongoose.Schema({
 FeedbackSchema.index({ serviceId: 1, rating: -1 });
 FeedbackSchema.index({ providerId: 1, createdAt: -1 });
 FeedbackSchema.index({ customerId: 1 });
-FeedbackSchema.index({ bookingId: 1 });
+FeedbackSchema.index({ bookingId: 1 }, { unique: true }); // One feedback per booking
 
 export default mongoose.model('Feedback', FeedbackSchema);

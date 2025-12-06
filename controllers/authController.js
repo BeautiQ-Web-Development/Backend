@@ -221,6 +221,10 @@ export const register = async (req, res) => {
       userData.languages = parsedLanguages;
       userData.policies = parsedPolicies;
       userData.approvalStatus = 'pending';
+      
+      // Generate Service Provider ID at registration time (not at approval)
+      userData.serviceProviderId = await generateServiceProviderSerial();
+      console.log('✅ Generated Service Provider ID at registration:', userData.serviceProviderId);
 
       // Handle additional file uploads for service providers (NIC and certificates)
       // Profile photo is already handled above for all user types

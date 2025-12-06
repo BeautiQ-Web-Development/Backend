@@ -120,7 +120,8 @@ export const checkFeedbackAccess = (req, res, next) => {
 
     // Customer can only access their own feedback
     if (user.role === 'customer') {
-      if (customerId && customerId !== user._id.toString() && customerId !== user.customerId) {
+      const userIdStr = user.userId?.toString() || user._id?.toString() || user.id?.toString();
+      if (customerId && customerId !== userIdStr && customerId !== user.customerId) {
         return res.status(403).json({
           success: false,
           message: 'Access denied. You can only view your own feedback',
@@ -132,7 +133,8 @@ export const checkFeedbackAccess = (req, res, next) => {
 
     // Provider can only access feedback for their services
     if (user.role === 'serviceProvider') {
-      if (providerId && providerId !== user._id.toString() && providerId !== user.providerId) {
+      const userIdStr = user.userId?.toString() || user._id?.toString() || user.id?.toString();
+      if (providerId && providerId !== userIdStr && providerId !== user.providerId) {
         return res.status(403).json({
           success: false,
           message: 'Access denied. You can only view feedback for your services',
