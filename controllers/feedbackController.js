@@ -2,6 +2,8 @@
 
 import { ObjectId } from 'mongodb';
 import Feedback from '../models/Feedback.js';
+import User from '../models/User.js';
+import { createNotification } from './notificationController.js';
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import dotenv from 'dotenv';
 
@@ -41,6 +43,42 @@ export const createFeedback = async (req, res) => {
 
     const customerId = req.user.userId;
 
+    // Check if feedback already exists for this booking
+    const existingFeedback = await Feedback.findOne({ bookingId });
+    if (existingFeedback) {
+      return res.status(400).json({
+        success: false,
+        message: 'You have already submitted feedback for this booking.',
+        error: 'DUPLICATE_FEEDBACK'
+      });
+    }
+
+    // Determine sentiment based on rating and feedback text
+    let sentiment = 'NEUTRAL';
+    const lowerFeedback = feedbackText?.toLowerCase() || '';
+    
+    // Check for negative keywords
+    const negativeKeywords = ['not recommend', 'bad', 'terrible', 'worst', 'awful', 'horrible', 'poor', 'disappointed', 'waste', 'never again', 'not good', 'messup', 'mess up', 'not neat', 'unprofessional'];
+    const positiveKeywords = ['excellent', 'great', 'amazing', 'wonderful', 'fantastic', 'perfect', 'recommend', 'love', 'best', 'outstanding', 'superb', 'awesome'];
+    
+    const hasNegativeKeywords = negativeKeywords.some(keyword => lowerFeedback.includes(keyword));
+    const hasPositiveKeywords = positiveKeywords.some(keyword => lowerFeedback.includes(keyword));
+    
+    if (rating >= 4 && !hasNegativeKeywords) {
+      sentiment = 'POSITIVE';
+    } else if (rating <= 2 || hasNegativeKeywords) {
+      sentiment = 'NEGATIVE';
+    } else if (rating === 3) {
+      // For 3 stars, check keywords to determine sentiment
+      if (hasPositiveKeywords && !hasNegativeKeywords) {
+        sentiment = 'POSITIVE';
+      } else if (hasNegativeKeywords) {
+        sentiment = 'NEGATIVE';
+      } else {
+        sentiment = 'NEUTRAL';
+      }
+    }
+
     // Create feedback in MongoDB
     const feedback = new Feedback({
       bookingId,
@@ -52,7 +90,7 @@ export const createFeedback = async (req, res) => {
       serviceName,
       providerName,
       customerName: customerName || req.user.fullName || 'Anonymous',
-      sentiment: 'NEUTRAL', // Default, can be updated by AI later
+      sentiment: sentiment, // Use calculated sentiment
       processedAt: new Date()
     });
 
@@ -68,6 +106,37 @@ export const createFeedback = async (req, res) => {
       Body: feedbackData,
       ContentType: 'application/json'
     }));
+
+    // Notify all admin users about the new feedback
+    try {
+      const adminUsers = await User.find({ role: 'admin' }).select('_id');
+      
+      for (const admin of adminUsers) {
+        await createNotification({
+          sender: customerId,
+          receiver: admin._id.toString(),
+          message: `New feedback received: ${rating} stars for "${serviceName}" - ${sentiment} sentiment`,
+          type: 'feedback_received',
+          data: {
+            feedbackId: feedback._id,
+            bookingId,
+            serviceId,
+            serviceName,
+            providerId,
+            providerName,
+            customerId,
+            customerName: feedback.customerName,
+            rating,
+            sentiment: sentiment,
+            feedbackPreview: feedbackText.substring(0, 100) + (feedbackText.length > 100 ? '...' : '')
+          }
+        });
+      }
+      console.log(`✅ Notified ${adminUsers.length} admin(s) about new feedback`);
+    } catch (notifError) {
+      console.error('⚠️ Failed to send admin notification for feedback:', notifError);
+      // Don't fail the request if notification fails
+    }
 
     res.status(201).json({
       success: true,
@@ -141,16 +210,29 @@ export const getAllFeedbacks = async (req, res) => {
     // Get total count for pagination
     const total = await Feedback.countDocuments(query);
 
-    // Fetch feedbacks
+    // Fetch feedbacks with provider data populated to get serviceProviderId
     const feedbacks = await Feedback
       .find(query)
+      .populate('providerId', 'serviceProviderId fullName businessName')
       .sort(sortOptions)
       .skip(skip)
-      .limit(limitNum);
+      .limit(limitNum)
+      .lean(); // Use lean() for better performance and easier object manipulation
+
+    // Transform feedbacks to include serviceProviderId
+    const transformedFeedbacks = feedbacks.map(feedback => {
+      // Add serviceProviderId from populated provider data
+      if (feedback.providerId && typeof feedback.providerId === 'object') {
+        const providerData = feedback.providerId;
+        feedback.serviceProviderId = providerData.serviceProviderId || null;
+        feedback.providerId = providerData._id; // Keep original ObjectId
+      }
+      return feedback;
+    });
 
     res.status(200).json({
       success: true,
-      data: feedbacks,
+      data: transformedFeedbacks,
       pagination: {
         total,
         page: pageNum,
@@ -589,6 +671,91 @@ export const getAllProviderStats = async (req, res) => {
   }
 };
 
+/**
+ * @desc    Get feedback stats grouped by service name (for customer dashboard)
+ * @route   GET /api/feedback/services/stats
+ * @access  Public
+ */
+export const getAllServiceStats = async (req, res) => {
+  try {
+    // Get aggregated stats by service name
+    const stats = await Feedback.aggregate([
+      {
+        $group: {
+          _id: '$serviceName',
+          avgRating: { $avg: '$rating' },
+          totalFeedbacks: { $sum: 1 },
+          positiveCount: {
+            $sum: { $cond: [{ $eq: ['$sentiment', 'POSITIVE'] }, 1, 0] }
+          },
+          negativeCount: {
+            $sum: { $cond: [{ $eq: ['$sentiment', 'NEGATIVE'] }, 1, 0] }
+          },
+          neutralCount: {
+            $sum: { $cond: [{ $eq: ['$sentiment', 'NEUTRAL'] }, 1, 0] }
+          }
+        }
+      },
+      {
+        $sort: { totalFeedbacks: -1 }
+      }
+    ]);
+
+    // Also get detailed feedback entries for each service
+    const detailedFeedbacks = await Feedback.find()
+      .select('serviceName rating sentiment feedbackText processedAt createdAt customerName')
+      .sort({ processedAt: -1 })
+      .lean();
+
+    // Group detailed feedbacks by service
+    const feedbacksByService = {};
+    detailedFeedbacks.forEach(fb => {
+      const serviceName = fb.serviceName;
+      if (!serviceName) return;
+      
+      if (!feedbacksByService[serviceName]) {
+        feedbacksByService[serviceName] = [];
+      }
+      
+      feedbacksByService[serviceName].push({
+        rating: fb.rating,
+        sentiment: fb.sentiment,
+        text: fb.feedbackText,
+        submittedAt: fb.processedAt || fb.createdAt,
+        customerName: fb.customerName || 'Anonymous'
+      });
+    });
+
+    // Convert array to map for easier lookup and include feedback entries
+    const statsMap = {};
+    stats.forEach(stat => {
+      const serviceName = stat._id;
+      if (!serviceName) return;
+      
+      statsMap[serviceName] = {
+        avgRating: parseFloat(stat.avgRating.toFixed(2)),
+        totalFeedbacks: stat.totalFeedbacks,
+        positiveCount: stat.positiveCount,
+        negativeCount: stat.negativeCount,
+        neutralCount: stat.neutralCount,
+        feedbacks: feedbacksByService[serviceName] || []
+      };
+    });
+
+    res.status(200).json({
+      success: true,
+      data: statsMap
+    });
+  } catch (error) {
+    console.error('❌ Error fetching all service stats:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch service stats',
+      error: process.env.NODE_ENV === 'development' ? error.message : 'Server error',
+    });
+  }
+};
+
 export default {
   initializeFeedbackController,
   getAllFeedbacks,
@@ -601,4 +768,5 @@ export default {
   deleteFeedback,
   getFeedbackTrends,
   getAllProviderStats,
+  getAllServiceStats,
 };

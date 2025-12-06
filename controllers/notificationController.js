@@ -25,6 +25,29 @@ export const createNotification = async ({ sender, receiver, message, type, data
       // Continue anyway as the receiver ID might be valid but in different format
     }
     
+    // Check for duplicate notifications - prevent creating same notification within last hour
+    const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+    const duplicateQuery = {
+      receiver,
+      type,
+      timestamp: { $gte: oneHourAgo }
+    };
+    
+    // For provider-related notifications, also check providerId to prevent duplicates
+    if (data.providerId) {
+      duplicateQuery['data.providerId'] = data.providerId;
+    }
+    // For customer-related notifications, check customerId
+    if (data.customerId) {
+      duplicateQuery['data.customerId'] = data.customerId;
+    }
+    
+    const existingNotification = await Notification.findOne(duplicateQuery);
+    if (existingNotification) {
+      console.log(`⚠️ Duplicate notification detected for type: ${type}, receiver: ${receiver}. Skipping creation.`);
+      return existingNotification; // Return existing notification instead of creating duplicate
+    }
+    
     const notification = new Notification({
       sender,
       receiver,

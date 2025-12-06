@@ -276,6 +276,7 @@ export const updateBookingStatus = async (req, res) => {
             serviceId: booking.serviceId,
             serviceName: service?.name || booking.serviceName,
             providerId: booking.serviceProviderId,
+            providerSerialNumber: provider?.serviceProviderId || null, // Serial number like SP001
             providerName: providerDisplayName,
             bookingDate: booking.bookingDate,
             bookingTime: booking.bookingTime

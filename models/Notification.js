@@ -31,7 +31,8 @@ const NotificationSchema = new mongoose.Schema({
       'admin_booking_alert',
       'payment_success',
       'payment_failed',
-      'feedback_request'
+      'feedback_request',
+      'feedback_received'
     ],
     default: 'serviceApproved'
   },
