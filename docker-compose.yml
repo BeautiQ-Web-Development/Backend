@@ -1,0 +1,23 @@
+# Docker Compose for LOCAL DEVELOPMENT
+# Run from parent directory: cd .. && docker-compose -f Backend/docker-compose.yml up
+# Or copy this file to parent directory containing both Frontend and Backend folders
+
+services:
+  backend:
+    build: .
+    container_name: beautiq-backend
+    ports:
+      - "5000:5000"
+    env_file:
+      - ./.env.prod
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"require('http').get('http://localhost:5000', r => process.exit(r.statusCode === 200 || r.statusCode === 404 ? 0 : 1)).on('error', () => process.exit(1))\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+
+  # Frontend is in separate repo: BeautiQ-Web-Development/Frontend
+  # For full stack local dev, use the docker-compose.yml in parent directory
+
