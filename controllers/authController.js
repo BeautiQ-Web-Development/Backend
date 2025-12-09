@@ -2,7 +2,6 @@
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import User from '../models/User.js';
-import express from 'express';
 import {  
   sendResetEmail, 
   sendRejectionEmail, 
@@ -13,14 +12,13 @@ import {
   sendAccountDeletionRejectionEmail,
   sendServiceProviderUpdateApprovalEmail,
   sendServiceProviderUpdateRejectionEmail,
-  sendServiceProviderDeleteApprovalEmail,
   sendServiceProviderDeleteRejectionEmail,
   sendServiceProviderRequestNotificationToAdmin
 } from '../config/mailer.js';
 import crypto from 'crypto';
 import Service from '../models/Service.js';
 import Booking from '../models/Booking.js';
-import { createNotification, notifyNewCustomerRegistration } from './notificationController.js';
+import { createNotification} from './notificationController.js';
 
 // Import BOTH functions from serial generator
 import { generateServiceProviderSerial } from '../Utils/serialGenerator.js';
