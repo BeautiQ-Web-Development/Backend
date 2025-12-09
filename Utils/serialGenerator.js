@@ -1,7 +1,6 @@
 //Utils/serialGenerator.js - FIXED SERVICE ID GENERATION WITH SP PREFIX
 import Service from '../models/Service.js';
 import User from '../models/User.js';
-import mongoose from 'mongoose';
 
 // FIXED: Generate Service Serial Number with SP prefix (matching your expectation)
 export const generateServiceSerial = async () => {
@@ -163,15 +162,15 @@ export const getExistingServiceProviderId = async (userId) => {
   }
 };
 
-// Function to check for duplicate service provider IDs and fix them
+// Function to check for duplicate service provider IDs and fix them - FIXED duplicate $ne
 export const checkAndFixDuplicateServiceProviderIds = async () => {
   try {
     console.log('🔍 Checking for duplicate service provider IDs...');
     
-    // Find all service providers with IDs
+    // Find all service providers with IDs - FIXED: Use $nin instead of duplicate $ne
     const serviceProviders = await User.find({
       role: 'serviceProvider',
-      serviceProviderId: { $exists: true, $ne: null, $ne: '' }
+      serviceProviderId: { $exists: true, $nin: [null, ''] } // ✅ FIXED: Use $nin instead of duplicate $ne
     }).sort({ createdAt: 1 }); // Sort by creation date ascending
     
     if (!serviceProviders.length) {

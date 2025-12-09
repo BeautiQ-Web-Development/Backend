@@ -339,12 +339,12 @@ userSchema.methods.getPendingUpdateType = function() {
   return this.pendingUpdates.deleteRequested ? 'delete' : 'update';
 };
 
-// ✅ Static method to get approved providers with IDs
+// ✅ Static method to get approved providers with IDs - FIXED duplicate $ne
 userSchema.statics.getApprovedProvidersWithIds = function() {
   return this.find({
     role: 'serviceProvider',
     approvalStatus: 'approved',
-    serviceProviderId: { $exists: true, $ne: null, $ne: '' }
+    serviceProviderId: { $exists: true, $nin: [null, ''] } // ✅ FIXED: Use $nin instead of duplicate $ne
   });
 };
 

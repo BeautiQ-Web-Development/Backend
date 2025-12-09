@@ -629,6 +629,7 @@ export const getPaymentHistory = async (req, res) => {
 };
 
 // Webhook handler for Stripe events
+// Webhook handler for Stripe events
 export const handleStripeWebhook = async (req, res) => {
   const sig = req.headers['stripe-signature'];
   let event;
@@ -644,26 +645,22 @@ export const handleStripeWebhook = async (req, res) => {
     return res.status(400).send(`Webhook Error: ${err.message}`);
   }
 
-  switch (event.type) {
-    case 'payment_intent.succeeded':
-      // NOTE: With the new flow, payment confirmation is handled entirely by the confirmPayment endpoint
-      // Webhooks are only for recovery scenarios where confirmPayment couldn't be called
-      const paymentIntent = event.data.object;
-      console.log('Stripe webhook: payment_intent.succeeded', paymentIntent.id);
-      // Payment confirmation is now handled by the confirmPayment endpoint
-      // This webhook is a fallback for error recovery scenarios
-      break;
+ switch (event.type) {
+  case 'payment_intent.succeeded': {  // ✅ Add {
+    const paymentIntent = event.data.object;
+    console.log('Stripe webhook: payment_intent.succeeded', paymentIntent.id);
+    break;
+  }  // ✅ Add }
 
-    case 'payment_intent.payment_failed':
-      const failedPayment = event.data.object;
-      console.log('Stripe webhook: payment_intent.payment_failed', failedPayment.id);
-      // Note: With new flow, failed payments don't create booking/payment records
-      // Only successfully confirmed payments create records via confirmPayment endpoint
-      break;
+  case 'payment_intent.payment_failed': {  // ✅ Add {
+    const failedPayment = event.data.object;
+    console.log('Stripe webhook: payment_intent.payment_failed', failedPayment.id);
+    break;
+  }  // ✅ Add }
 
-    default:
-      console.log(`Unhandled event type ${event.type}`);
-  }
+  default:
+    console.log(`Unhandled event type ${event.type}`);
+}
 
   res.json({ received: true });
 };
