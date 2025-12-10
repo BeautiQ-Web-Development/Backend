@@ -1,0 +1,40 @@
+name: CD Backend
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build project
+        run: npm run build
+
+      - name: Run tests
+        run: npm test
+
+      # Example deployment step (replace with your actual deployment logic)
+      - name: Deploy to server
+        env:
+          EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
+          SERVER_HOST: ${{ secrets.SERVER_HOST }}
+          SERVER_USER: ${{ secrets.SERVER_USER }}
+        run: |
+          echo "$EC2_SSH_KEY" > private_key
+          chmod 600 private_key
+          rsync -avz -e "ssh -i private_key -o StrictHostKeyChecking=no" ./dist/ $SERVER_USER@$SERVER_HOST:/path/to/deploy/
+          rm private_key
