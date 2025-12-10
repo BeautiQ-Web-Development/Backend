@@ -1,40 +1,49 @@
-name: CD Backend
+name: Backend CD - Deploy to EC2
 
 on:
   push:
     branches:
       - main
+  workflow_dispatch:
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-
+    
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v3
+      - name: Deploy to EC2
+        uses: appleboy/ssh-action@v1.0.0
         with:
-          node-version: '18'
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            cd ~/Backend
+            git pull origin main
+            cat > .env.prod << 'ENVEOF'
+            MONGODB_URI=${{ secrets.MONGODB_URI }}
+            JWT_SECRET=${{ secrets.JWT_SECRET }}
+            STRIPE_SECRET_KEY=${{ secrets.STRIPE_SECRET_KEY }}
+            AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }}
+            AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }}
+            AWS_REGION=${{ secrets.AWS_REGION }}
+            AWS_BUCKET_NAME=${{ secrets.AWS_BUCKET_NAME }}
+            PORT=5000
+            NODE_ENV=production
+            FRONTEND_URL=http://${{ secrets.SERVER_HOST }}
+            ENVEOF
+            docker-compose down || true
+            docker-compose up -d --build
+            docker-compose ps
 
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Build project
-        run: npm run build
-
-      - name: Run tests
-        run: npm test
-
-      # Example deployment step (replace with your actual deployment logic)
-      - name: Deploy to server
-        env:
-          EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
-          SERVER_HOST: ${{ secrets.SERVER_HOST }}
-          SERVER_USER: ${{ secrets.SERVER_USER }}
-        run: |
-          echo "$EC2_SSH_KEY" > private_key
-          chmod 600 private_key
-          rsync -avz -e "ssh -i private_key -o StrictHostKeyChecking=no" ./dist/ $SERVER_USER@$SERVER_HOST:/path/to/deploy/
-          rm private_key
+      - name: Verify Deployment
+        uses: appleboy/ssh-action@v1.0.0
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            sleep 15
+            docker ps | grep beautiq-backend
+            curl -f http://localhost:5000/api || echo "API check failed"
+            docker logs beautiq-backend --tail=20
